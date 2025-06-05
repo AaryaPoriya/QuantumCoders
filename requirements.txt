@@ -1,8 +1,7 @@
 Flask
-python-dotenv
-psycopg2-binary
-pydantic
-PyJWT
-Flask-Cors
 gunicorn
-waitress 
+python-dotenv
+flask-cors
+psycopg2-binary
+pydantic[email]  # 👈 this includes email-validator automatically
+PyJWT
