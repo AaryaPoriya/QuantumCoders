@@ -19,7 +19,7 @@ import psycopg2
 logger = logging.getLogger(__name__)
 bp = Blueprint('auth', __name__, url_prefix='/auth')
 
-# API 1: Verify or Save Mobile Number (and create minimal profile if new)
+# API 1: Verify or Save Mobile Number (and create/update profile status)
 @bp.route('/verify_mobile', methods=['POST'])
 def verify_mobile_number_route():
     try:
@@ -32,10 +32,19 @@ def verify_mobile_number_route():
         from app.db import get_conn, close_conn
         conn = get_conn()
         with conn.cursor() as cur:
-            cur.execute("SELECT user_id FROM public.user_details WHERE mobilenum = %s;", (data.mobile_number,))
-            user_row = cur.fetchone()
+            cur.execute("SELECT user_id, user_name, is_profile_complete FROM public.user_details WHERE mobilenum = %s;", (data.mobile_number,))
+            user_info_row = cur.fetchone()
 
-            if not user_row:
+            if user_info_row:
+                # User exists
+                user_id, user_name_db, is_profile_complete_db = user_info_row
+                if not is_profile_complete_db and user_name_db is not None:
+                    # Profile has a name but flag is false. Correct it.
+                    logger.info(f"User {user_id} ({data.mobile_number}) has a name but is_profile_complete is false. Updating to true.")
+                    cur.execute("UPDATE public.user_details SET is_profile_complete = TRUE WHERE user_id = %s;", (user_id,))
+                # else: User exists and their profile complete status is already correct or they have no name yet.
+            else:
+                # User does not exist, create a minimal profile
                 cur.execute("""
                     INSERT INTO public.user_details (mobilenum, is_profile_complete)
                     VALUES (%s, FALSE) RETURNING user_id;
@@ -46,9 +55,9 @@ def verify_mobile_number_route():
                     logger.error(f"Failed to create minimal profile for {data.mobile_number}")
                     return jsonify(ErrorResponse(detail='Failed to initialize user profile.').dict()), 500
                 logger.info(f"Minimal profile created for {data.mobile_number}, user_id: {new_user_minimal_row[0]}")
-            conn.commit()
+            conn.commit() 
         close_conn(conn)
-        conn = None # Set to None after successful close
+        conn = None 
         
         generate_otp_for_mobile(data.mobile_number)
         return jsonify(MessageResponse(message=f'OTP sent to {data.mobile_number}').dict()), 200
@@ -80,10 +89,11 @@ def verify_otp_route():
         from app.db import get_conn, close_conn
         conn = get_conn()
         with conn.cursor() as cur:
+            # Fetch user_id and their definitive is_profile_complete status
             cur.execute("SELECT user_id, is_profile_complete FROM public.user_details WHERE mobilenum = %s;", (data.mobile_number,))
             user_details_row = cur.fetchone()
         close_conn(conn)
-        conn = None # Set to None after successful close
+        conn = None 
 
         if not user_details_row:
             logger.error(f"User not found for {data.mobile_number} after OTP verification.")
