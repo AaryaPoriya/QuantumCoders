@@ -98,8 +98,6 @@ This application is configured to be run with Gunicorn in a production environme
     *   Replace `3` with an appropriate number of workers for your server (e.g., `(2 * CPU_CORES) + 1`).
     *   Replace `5001` with the port you want Gunicorn to listen on.
 
-3.  **Procfile:**
-    The included `Procfile` (`web: gunicorn run:app`) is used by many hosting platforms (like Render, Heroku) to automatically start your application with Gunicorn. You usually don't run this command directly if your platform supports Procfiles.
 
 ## API Endpoints
 
