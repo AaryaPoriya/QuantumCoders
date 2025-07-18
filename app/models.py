@@ -129,7 +129,7 @@ class SearchResponse(BaseModel):
 
 # --- Cart Models ---
 class ConnectCartRequest(BaseModel):
-    physical_cart_id: Optional[str] = None
+    cart_id: int
 
 class CartConnectionResponse(BaseModel):
     cart_id: int
