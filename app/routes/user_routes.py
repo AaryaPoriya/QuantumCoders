@@ -1,7 +1,7 @@
 from flask import Blueprint, request, jsonify
 from pydantic import ValidationError
 from app.models import (
-    ChecklistItemCreate, ChecklistItemResponse, ChecklistItemRemove, ChecklistResponse, 
+    ChecklistItemCreate, ChecklistItemResponse, ChecklistResponse, 
     Recipe as RecipeModel, Product as ProductModel, 
     ErrorResponse, MessageResponse
 )
