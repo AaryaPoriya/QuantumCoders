@@ -39,10 +39,8 @@ def connect_cart_route():
             existing_cart_row = cur.fetchone()
             if existing_cart_row:
                 if existing_cart_row[0] == data.cart_id:
-                    close_conn(conn)
                     return jsonify(CartConnectionResponse(cart_id=data.cart_id, user_id=user_id, message="You are already connected to this cart.").dict()), 200
                 else:
-                    close_conn(conn)
                     return jsonify(ErrorResponse(detail=f'You are already connected to cart {existing_cart_row[0]}. Please disconnect first.').dict()), 409
 
             # Check the status of the requested cart
@@ -50,12 +48,10 @@ def connect_cart_route():
             cart_row = cur.fetchone()
 
             if not cart_row:
-                close_conn(conn)
                 return jsonify(ErrorResponse(detail=f'Cart with ID {data.cart_id} does not exist.').dict()), 404
             
             cart_user_id = cart_row[0]
             if cart_user_id is not None:
-                close_conn(conn)
                 return jsonify(ErrorResponse(detail=f'Cart {data.cart_id} is already in use by another user.').dict()), 409
 
             # If we reach here, the cart exists and is available. Assign it to the user.
@@ -63,7 +59,6 @@ def connect_cart_route():
             cur.execute(update_query, (user_id, data.cart_id))
             conn.commit()
         
-        close_conn(conn)
         return jsonify(CartConnectionResponse(cart_id=data.cart_id, user_id=user_id, message="Cart connected successfully.").dict()), 200
 
     except psycopg2.Error as db_err:
