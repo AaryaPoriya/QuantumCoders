@@ -95,9 +95,6 @@ class ChecklistItemBase(BaseModel):
 class ChecklistItemCreate(ChecklistItemBase):
     pass
 
-class ChecklistItemRemove(ChecklistItemBase):
-    pass
-
 class ChecklistItemResponse(ChecklistItemBase):
     checklist_id: int
     user_id: int
