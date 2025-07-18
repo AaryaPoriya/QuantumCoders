@@ -25,38 +25,58 @@ def connect_cart_route():
         return jsonify(ErrorResponse(detail='Authentication required.').dict()), 401
 
     try:
-        find_cart_query = "SELECT cart_id FROM public.total_carts WHERE user_id = %s LIMIT 1;"
-        cart_row = execute_query(find_cart_query, (user_id,), fetchone=True)
+        data = ConnectCartRequest(**request.json)
+    except ValidationError as e:
+        return handle_pydantic_error(e)
 
-        if cart_row:
-            cart_id = cart_row[0]
-            return jsonify(CartConnectionResponse(cart_id=cart_id, user_id=user_id, message="Already connected to cart.").dict()), 200
-        else:
-            create_cart_query = "INSERT INTO public.total_carts (user_id, cart_weight) VALUES (%s, 0) RETURNING cart_id;"
-            conn = None
-            new_cart_id = None
-            from app.db import get_conn, close_conn
-            try:
-                conn = get_conn()
-                with conn.cursor() as cur:
-                    cur.execute(create_cart_query, (user_id,))
-                    new_cart_row = cur.fetchone()
-                    if new_cart_row:
-                        new_cart_id = new_cart_row[0]
-                    conn.commit()
-            except Exception as db_e:
-                if conn: conn.rollback()
-                raise db_e
-            finally:
-                if conn: close_conn(conn)
+    conn = None
+    try:
+        from app.db import get_conn, close_conn
+        conn = get_conn()
+        with conn.cursor() as cur:
+            # Check if the user is already connected to any cart
+            cur.execute("SELECT cart_id FROM public.total_carts WHERE user_id = %s;", (user_id,))
+            existing_cart_row = cur.fetchone()
+            if existing_cart_row:
+                if existing_cart_row[0] == data.cart_id:
+                    close_conn(conn)
+                    return jsonify(CartConnectionResponse(cart_id=data.cart_id, user_id=user_id, message="You are already connected to this cart.").dict()), 200
+                else:
+                    close_conn(conn)
+                    return jsonify(ErrorResponse(detail=f'You are already connected to cart {existing_cart_row[0]}. Please disconnect first.').dict()), 409
+
+            # Check the status of the requested cart
+            cur.execute("SELECT user_id FROM public.total_carts WHERE cart_id = %s;", (data.cart_id,))
+            cart_row = cur.fetchone()
+
+            if not cart_row:
+                close_conn(conn)
+                return jsonify(ErrorResponse(detail=f'Cart with ID {data.cart_id} does not exist.').dict()), 404
             
-            if new_cart_id:
-                return jsonify(CartConnectionResponse(cart_id=new_cart_id, user_id=user_id, message="New cart connected successfully.").dict()), 201
-            else:
-                return jsonify(ErrorResponse(detail='Failed to connect cart.').dict()), 500
+            cart_user_id = cart_row[0]
+            if cart_user_id is not None:
+                close_conn(conn)
+                return jsonify(ErrorResponse(detail=f'Cart {data.cart_id} is already in use by another user.').dict()), 409
+
+            # If we reach here, the cart exists and is available. Assign it to the user.
+            update_query = "UPDATE public.total_carts SET user_id = %s WHERE cart_id = %s;"
+            cur.execute(update_query, (user_id, data.cart_id))
+            conn.commit()
+        
+        close_conn(conn)
+        return jsonify(CartConnectionResponse(cart_id=data.cart_id, user_id=user_id, message="Cart connected successfully.").dict()), 200
+
+    except psycopg2.Error as db_err:
+        if conn: conn.rollback()
+        logger.error(f"Database error connecting cart for user {user_id}: {db_err}")
+        return jsonify(ErrorResponse(detail=f'Database error: {str(db_err)}').dict()), 500
     except Exception as e:
+        if conn: conn.rollback()
         logger.error(f"Error connecting cart for user {user_id}: {e}")
         return jsonify(ErrorResponse(detail='Internal server error').dict()), 500
+    finally:
+        if conn and not conn.closed:
+             close_conn(conn)
 
 # API 14: View Cart
 @bp.route('/view', methods=['GET'])
