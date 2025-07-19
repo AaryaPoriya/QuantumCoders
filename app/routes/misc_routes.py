@@ -1,4 +1,4 @@
-from flask import Blueprint, jsonify
+from flask import Blueprint, jsonify, send_from_directory
 from app.models import (
     FoodtypesCategoriesResponse, FoodType as FoodTypeModel, Category as CategoryModel,
     StoreSection as StoreSectionModel, ErrorResponse
@@ -63,3 +63,7 @@ def get_store_sections():
         logger.error(f"Error fetching store sections: {e}")
         if conn and not conn.closed: close_conn(conn)
         return jsonify(ErrorResponse(detail='Internal server error').dict()), 500 
+
+@bp.route('/images/<path:filename>')
+def serve_image(filename):
+    return send_from_directory('SmartCart/images', filename) 
