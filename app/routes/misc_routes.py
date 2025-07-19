@@ -1,11 +1,12 @@
-from flask import Blueprint, jsonify, send_from_directory
+from flask import Blueprint, jsonify, send_from_directory, current_app
+import os
 from app.models import (
     FoodtypesCategoriesResponse, FoodType as FoodTypeModel, Category as CategoryModel,
     StoreSection as StoreSectionModel, ErrorResponse
 )
 from app.db import execute_query
-from app.auth import jwt_required # Decide if these are public or need auth
-from app.utils import serialize_rows # Using serialize_rows for direct conversion
+from app.auth import jwt_required
+from app.utils import serialize_rows
 import logging
 
 logger = logging.getLogger(__name__)
@@ -13,7 +14,6 @@ bp = Blueprint('misc', __name__, url_prefix='/misc')
 
 # API 4: Fetch All Foodtypes and Categories
 @bp.route('/foodtypes-categories', methods=['GET'])
-# @jwt_required # Make this public or protected based on requirements
 def get_foodtypes_and_categories():
     foodtypes = []
     categories = []
@@ -44,7 +44,6 @@ def get_foodtypes_and_categories():
 
 # API 16: Get Store Sections
 @bp.route('/store-sections', methods=['GET'])
-# @jwt_required # Make this public or protected based on requirements
 def get_store_sections():
     sections = []
     conn = None
@@ -66,4 +65,9 @@ def get_store_sections():
 
 @bp.route('/images/<path:filename>')
 def serve_image(filename):
-    return send_from_directory('QuantumCoders/images', filename) 
+    # Construct the absolute path to the images directory.
+    # 'current_app.root_path' points to the 'app' folder.
+    # '..' goes one level up to the project root ('QuantumCoders').
+    # This creates a reliable path to QuantumCoders/images/.
+    images_dir = os.path.abspath(os.path.join(current_app.root_path, '..', 'images'))
+    return send_from_directory(images_dir, filename) 
