@@ -66,4 +66,4 @@ def get_store_sections():
 
 @bp.route('/images/<path:filename>')
 def serve_image(filename):
-    return send_from_directory('SmartCart/images', filename) 
+    return send_from_directory('QuantumCoders/images', filename) 
