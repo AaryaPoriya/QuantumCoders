@@ -81,74 +81,63 @@ def search_products():
 
 # API 12: Get Product Details
 @bp.route('/<int:product_id>', methods=['GET'])
-# @jwt_required # Decide if product details are public or require auth
 def get_product_details(product_id):
-    product_query = """
-    SELECT p.product_id, p.product_name, p.price, p.discounted_price, 
-           p.barcode, p.weight, p.expiry, p.category_id, p.offer_name,
-           c.category_name
+    query = """
+    SELECT 
+        p.product_id, p.product_name, p.price, p.discounted_price, 
+        p.barcode, p.weight, p.expiry, p.category_id, p.offer_name,
+        c.category_name,
+        (
+            SELECT json_agg(json_build_object('foodtype_id', ft.foodtype_id, 'foodtype_name', ft.foodtype_name))
+            FROM public.product_foodtype pft
+            JOIN public.foodtype ft ON pft.foodtype_id = ft.foodtype_id
+            WHERE pft.product_id = p.product_id
+        ) as foodtypes,
+        (
+            SELECT json_agg(json_build_object('allergy_id', a.allergy_id, 'allergy_name', a.allergy_name))
+            FROM public.food_allergy fa
+            JOIN public.allergy a ON fa.allergy_id = a.allergy_id
+            WHERE fa.product_id = p.product_id
+        ) as allergies
     FROM public.product p
     LEFT JOIN public.category c ON p.category_id = c.category_id
     WHERE p.product_id = %s;
     """
     
-    foodtypes_query = """
-    SELECT ft.foodtype_id, ft.foodtype_name 
-    FROM public.product_foodtype pft
-    JOIN public.foodtype ft ON pft.foodtype_id = ft.foodtype_id
-    WHERE pft.product_id = %s;
-    """
-
-    allergies_query = """
-    SELECT a.allergy_id, a.allergy_name
-    FROM public.food_allergy fa
-    JOIN public.allergy a ON fa.allergy_id = a.allergy_id
-    WHERE fa.product_id = %s;
-    """
-    
+    conn = None
     try:
-        conn = None
-        product_data = None
-        foodtype_list = []
-        allergy_list = []
         from app.db import get_conn, close_conn
-        
-        # Fetch main product details
         conn = get_conn()
         with conn.cursor() as cur:
-            cur.execute(product_query, (product_id,))
+            cur.execute(query, (product_id,))
             row = cur.fetchone()
+            
             if not row:
                 close_conn(conn)
                 return jsonify(ErrorResponse(detail=f'Product with id {product_id} not found.').dict()), 404
-            product_data_raw = serialize_row(row, cur.description)
-            # Note: category_name is fetched but not directly in ProductModel, handled in ProductDetailResponse if needed or kept separate
-            product_base_data = {k: v for k, v in product_data_raw.items() if k != 'category_name'}
-            product_data = ProductModel(**product_base_data)
+            
+            product_data = serialize_row(row, cur.description)
+            
+            # Extract nested JSON data
+            foodtypes_list = product_data.get('foodtypes') or []
+            allergies_list = product_data.get('allergies') or []
+            
+            # Create the main product model, excluding the joined category_name and aggregated fields
+            product_base_data = {
+                k: v for k, v in product_data.items() 
+                if k not in ['category_name', 'foodtypes', 'allergies']
+            }
+            
+            response = ProductDetailResponse(
+                **product_base_data,
+                foodtypes=[ProductFoodTypeDetail(**ft) for ft in foodtypes_list],
+                allergies=[ProductAllergyDetail(**al) for al in allergies_list]
+            )
 
-            # Fetch foodtypes
-            cur.execute(foodtypes_query, (product_id,))
-            ft_rows = cur.fetchall()
-            if ft_rows:
-                serialized_ft = serialize_rows(ft_rows, cur.description)
-                foodtype_list = [ProductFoodTypeDetail(**ft) for ft in serialized_ft]
-
-            # Fetch allergies
-            cur.execute(allergies_query, (product_id,))
-            al_rows = cur.fetchall()
-            if al_rows:
-                serialized_al = serialize_rows(al_rows, cur.description)
-                allergy_list = [ProductAllergyDetail(**al) for al in serialized_al]
         close_conn(conn)
-
-        response = ProductDetailResponse(
-            **product_data.dict(), 
-            foodtypes=foodtype_list, 
-            allergies=allergy_list
-        )
         return jsonify(response.dict()), 200
 
     except Exception as e:
         logger.error(f"Error fetching product details for product_id {product_id}: {e}")
-        if conn: close_conn(conn, e) # Ensure connection is closed if error occurred before explicit close_conn
+        if conn and not conn.closed: close_conn(conn)
         return jsonify(ErrorResponse(detail='Internal server error').dict()), 500 

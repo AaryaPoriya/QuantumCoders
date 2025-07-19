@@ -15,28 +15,42 @@ bp = Blueprint('misc', __name__, url_prefix='/misc')
 # API 4: Fetch All Foodtypes and Categories
 @bp.route('/foodtypes-categories', methods=['GET'])
 def get_foodtypes_and_categories():
-    foodtypes = []
-    categories = []
+    query = """
+    SELECT 
+        (
+            SELECT json_agg(
+                json_build_object('foodtype_id', ft.foodtype_id, 'foodtype_name', ft.foodtype_name)
+                ORDER BY ft.foodtype_name
+            ) 
+            FROM public.foodtype ft
+        ) as foodtypes,
+        (
+            SELECT json_agg(
+                json_build_object('category_id', c.category_id, 'category_name', c.category_name)
+                ORDER BY c.category_name
+            ) 
+            FROM public.category c
+        ) as categories;
+    """
     conn = None
     try:
         from app.db import get_conn, close_conn
         conn = get_conn()
         with conn.cursor() as cur:
-            # Fetch Foodtypes
-            cur.execute("SELECT foodtype_id, foodtype_name FROM public.foodtype ORDER BY foodtype_name;")
-            ft_rows = cur.fetchall()
-            if ft_rows:
-                serialized_ft = serialize_rows(ft_rows, cur.description)
-                foodtypes = [FoodTypeModel(**ft) for ft in serialized_ft]
+            cur.execute(query)
+            row = cur.fetchone()
             
-            # Fetch Categories
-            cur.execute("SELECT category_id, category_name FROM public.category ORDER BY category_name;")
-            cat_rows = cur.fetchall()
-            if cat_rows:
-                serialized_cat = serialize_rows(cat_rows, cur.description)
-                categories = [CategoryModel(**cat) for cat in serialized_cat]
+            data = serialize_row(row, cur.description) if row else {}
+            foodtypes_list = data.get('foodtypes') or []
+            categories_list = data.get('categories') or []
+            
+            response = FoodtypesCategoriesResponse(
+                foodtypes=[FoodTypeModel(**ft) for ft in foodtypes_list],
+                categories=[CategoryModel(**cat) for cat in categories_list]
+            )
+            
         close_conn(conn)
-        return jsonify(FoodtypesCategoriesResponse(foodtypes=foodtypes, categories=categories).dict()), 200
+        return jsonify(response.dict()), 200
     except Exception as e:
         logger.error(f"Error fetching foodtypes/categories: {e}")
         if conn and not conn.closed: close_conn(conn)

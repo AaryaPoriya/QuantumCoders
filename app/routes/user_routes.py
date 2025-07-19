@@ -293,3 +293,4 @@ def show_recipe_details(recipe_id):
         logger.error(f"Error fetching details for recipe {recipe_id}: {e}")
         if conn and not conn.closed: close_conn(conn)
         return jsonify(ErrorResponse(detail='Internal server error').dict()), 500
+

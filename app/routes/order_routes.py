@@ -136,12 +136,22 @@ def get_order_history():
 
     query = """
     SELECT 
-        o.order_id, o.user_id, o.total_products, o.total_price, o.discounted_price AS order_discounted_price,
-        do.product_id, do.quantity, do.price AS item_price, do.discounted_price AS item_discounted_price,
-        p.product_name
+        o.order_id, o.user_id, o.total_products, o.total_price, o.discounted_price,
+        (
+            SELECT json_agg(
+                json_build_object(
+                    'product_id', od.product_id,
+                    'quantity', od.quantity,
+                    'price', od.price,
+                    'discounted_price', od.discounted_price,
+                    'product_name', p.product_name
+                )
+            )
+            FROM public.detail_order od
+            JOIN public.product p ON od.product_id = p.product_id
+            WHERE od.order_id = o.order_id
+        ) as items
     FROM public.orders o
-    JOIN public.detail_order do ON o.order_id = do.order_id
-    JOIN public.product p ON do.product_id = p.product_id
     WHERE o.user_id = %s
     ORDER BY o.order_id DESC;
     """
@@ -154,33 +164,15 @@ def get_order_history():
             cur.execute(query, (user_id,))
             rows = cur.fetchall()
             
-            orders_map = {}
+            orders_list = []
             if rows:
-                for row_data in rows:
-                    row_dict = serialize_row(row_data, cur.description)
-                    order_id = row_dict['order_id']
-                    
-                    if order_id not in orders_map:
-                        orders_map[order_id] = OrderResponse(
-                            order_id=order_id,
-                            user_id=row_dict['user_id'],
-                            total_products=row_dict['total_products'],
-                            total_price=row_dict['total_price'],
-                            discounted_price=row_dict['order_discounted_price'],
-                            items=[]
-                        )
-                    
-                    orders_map[order_id].items.append(
-                        DetailOrderItemResponse(
-                            product_id=row_dict['product_id'],
-                            quantity=row_dict['quantity'],
-                            price=row_dict['item_price'],
-                            discounted_price=row_dict['item_discounted_price'],
-                            product_name=row_dict['product_name']
-                        )
-                    )
+                serialized_orders = serialize_rows(rows, cur.description)
+                for order_data in serialized_orders:
+                    # Items are already fetched as a JSON array from the DB
+                    items_list = order_data.get('items') or []
+                    order_data['items'] = [DetailOrderItemResponse(**item) for item in items_list]
+                    orders_list.append(OrderResponse(**order_data))
 
-            orders_list = list(orders_map.values())
         close_conn(conn)
         return jsonify([o.dict() for o in orders_list]), 200
     except Exception as e:

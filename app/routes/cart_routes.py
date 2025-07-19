@@ -81,57 +81,64 @@ def view_cart_route():
     if not user_id:
         return jsonify(ErrorResponse(detail='Authentication required.').dict()), 401
 
-    cart_info_query = "SELECT cart_id, cart_weight FROM public.total_carts WHERE user_id = %s LIMIT 1;"
+    query = """
+    WITH user_cart AS (
+        SELECT cart_id, cart_weight FROM public.total_carts WHERE user_id = %s LIMIT 1
+    )
+    SELECT 
+        uc.cart_id,
+        uc.cart_weight,
+        (
+            SELECT json_agg(
+                json_build_object(
+                    'cart_items_id', ci.cart_items_id,
+                    'cart_id', ci.cart_id,
+                    'product_id', ci.product_id,
+                    'quantity', ci.quantity,
+                    'product', json_build_object(
+                        'product_id', p.product_id,
+                        'product_name', p.product_name,
+                        'price', p.price,
+                        'discounted_price', p.discounted_price,
+                        'barcode', p.barcode,
+                        'weight', p.weight,
+                        'expiry', p.expiry,
+                        'category_id', p.category_id,
+                        'offer_name', p.offer_name
+                    )
+                )
+            )
+            FROM public.cart_items ci
+            JOIN public.product p ON ci.product_id = p.product_id
+            WHERE ci.cart_id = uc.cart_id
+        ) as items
+    FROM user_cart uc;
+    """
     
     conn = None
     try:
         from app.db import get_conn, close_conn
         conn = get_conn()
-        cart_id = None
-        cart_weight = 0
-        items_list = []
         with conn.cursor() as cur:
-            cur.execute(cart_info_query, (user_id,))
-            cart_info_row = cur.fetchone()
-            if not cart_info_row:
+            cur.execute(query, (user_id,))
+            row = cur.fetchone()
+            
+            if not row or not row[0]:
                 close_conn(conn)
                 return jsonify(ErrorResponse(detail='No active cart found for user.').dict()), 404
-            cart_id = cart_info_row[0]
-            cart_weight = cart_info_row[1] if cart_info_row[1] is not None else 0
+            
+            cart_data = serialize_row(row, cur.description)
+            items_list = cart_data.get('items') or []
+            
+            # Pydantic models will handle the float conversion for weight
+            response_data = CartViewResponse(
+                cart_id=cart_data['cart_id'],
+                items=[CartItemModel(**item) for item in items_list],
+                total_weight=cart_data.get('cart_weight')
+            )
 
-            items_query = """
-            SELECT ci.cart_items_id, ci.cart_id, ci.product_id, ci.quantity,
-                   p.product_name, p.price, p.discounted_price, p.barcode, p.weight as product_weight, p.expiry, p.category_id, p.offer_name
-            FROM public.cart_items ci
-            JOIN public.product p ON ci.product_id = p.product_id
-            WHERE ci.cart_id = %s;
-            """
-            cur.execute(items_query, (cart_id,))
-            rows = cur.fetchall()
-            if rows:
-                for row_data in rows:
-                    serialized_item = serialize_row(row_data, cur.description)
-                    product_data = {
-                        'product_id': serialized_item['product_id'],
-                        'product_name': serialized_item['product_name'],
-                        'price': serialized_item['price'],
-                        'discounted_price': serialized_item.get('discounted_price'),
-                        'barcode': serialized_item['barcode'],
-                        'weight': serialized_item.get('product_weight'),
-                        'expiry': serialized_item.get('expiry'),
-                        'category_id': serialized_item.get('category_id'),
-                        'offer_name': serialized_item.get('offer_name')
-                    }
-                    cart_item = CartItemModel(
-                        cart_items_id=serialized_item['cart_items_id'],
-                        cart_id=serialized_item['cart_id'],
-                        product_id=serialized_item['product_id'],
-                        quantity=serialized_item['quantity'],
-                        product=ProductModel(**product_data)
-                    )
-                    items_list.append(cart_item)
         close_conn(conn)
-        return jsonify(CartViewResponse(cart_id=cart_id, items=items_list, total_weight=float(cart_weight)).dict()), 200
+        return jsonify(response_data.dict()), 200
     except Exception as e:
         logger.error(f"Error viewing cart for user {user_id}: {e}")
         if conn and not conn.closed: close_conn(conn)
@@ -252,60 +259,88 @@ def get_shortest_path_route():
 
     return jsonify(ShortestPathResponse(path=dummy_path).dict()), 200
 
-# API 20: Add Product Into Cart and Update Cart Weight (for ESP32)
-@bp.route('/esp32/add_item', methods=['POST'])
-# Consider API Key auth for ESP32 if JWT is complex for it
+# API 20: Add/Update Item in Cart (from ESP32)
+@bp.route('/esp32/update_item', methods=['POST'])
 def update_cart_item_esp32_route():
     try:
         data = Esp32CartUpdateRequest(**request.json)
     except ValidationError as e:
         return handle_pydantic_error(e)
 
-    upsert_item_query = """
-    INSERT INTO public.cart_items (cart_id, product_id, quantity) 
-    VALUES (%s, %s, 1) 
-    ON CONFLICT (cart_id, product_id) 
-    DO UPDATE SET quantity = cart_items.quantity + 1
-    RETURNING cart_items_id;
-    """
-    update_weight_query = "UPDATE public.total_carts SET cart_weight = %s WHERE cart_id = %s;"
-    
     conn = None
     try:
         from app.db import get_conn, close_conn
         conn = get_conn()
         with conn.cursor() as cur:
-            cur.execute(upsert_item_query, (data.cart_id, data.product_id))
-            item_row = cur.fetchone()
-            if not item_row:
+            # Check if the product exists
+            cur.execute("SELECT weight FROM public.product WHERE product_id = %s;", (data.product_id,))
+            product_row = cur.fetchone()
+            if not product_row:
                 conn.rollback()
-                close_conn(conn)
-                return jsonify(ErrorResponse(detail='Failed to add item to cart.').dict()), 500
+                return jsonify(ErrorResponse(detail=f"Product with ID {data.product_id} not found.").dict()), 404
             
-            cur.execute(update_weight_query, (data.weight, data.cart_id))
-            conn.commit()
-        close_conn(conn)
-        return jsonify(MessageResponse(message=f'Product {data.product_id} added/updated in cart {data.cart_id}, weight updated to {data.weight}.').dict()), 200
-    except psycopg2.Error as db_err:
-        logger.error(f"Database error updating cart for ESP32 {data.cart_id}: {db_err}")
-        if conn: conn.rollback()
-        if conn and not conn.closed: close_conn(conn)
-        return jsonify(ErrorResponse(detail=f'Database error: {str(db_err)}').dict()), 500
-    except Exception as e:
-        logger.error(f"Error updating cart for ESP32 {data.cart_id}: {e}")
-        if conn: conn.rollback()
-        if conn and not conn.closed: close_conn(conn)
-        return jsonify(ErrorResponse(detail='Internal server error').dict()), 500
+            base_product_weight = product_row[0]
+            if base_product_weight is None or base_product_weight == 0:
+                conn.rollback() # No need to proceed if weight is not defined
+                return jsonify(ErrorResponse(detail=f"Product with ID {data.product_id} has no defined weight.").dict()), 400
 
-# API 21: Remove Product From Cart
-@bp.route('/item/remove', methods=['POST'])
+            # Determine quantity from total weight measured by ESP32
+            # This logic assumes the weight passed is the total for that product type
+            quantity = round(data.weight / base_product_weight)
+
+            if quantity > 0:
+                # Upsert: Update quantity if item exists, else insert
+                upsert_query = """
+                INSERT INTO public.cart_items (cart_id, product_id, quantity)
+                VALUES (%s, %s, %s)
+                ON CONFLICT (cart_id, product_id)
+                DO UPDATE SET quantity = EXCLUDED.quantity;
+                """
+                cur.execute(upsert_query, (data.cart_id, data.product_id, quantity))
+            else:
+                # If quantity is 0, remove the item from the cart
+                delete_query = "DELETE FROM public.cart_items WHERE cart_id = %s AND product_id = %s;"
+                cur.execute(delete_query, (data.cart_id, data.product_id))
+
+            # After updating cart items, update the total weight in the total_carts table
+            # This requires summing up all item weights in the cart
+            update_weight_query = """
+            UPDATE public.total_carts tc
+            SET cart_weight = (
+                SELECT SUM(p.weight * ci.quantity)
+                FROM public.cart_items ci
+                JOIN public.product p ON ci.product_id = p.product_id
+                WHERE ci.cart_id = tc.cart_id
+            )
+            WHERE tc.cart_id = %s;
+            """
+            cur.execute(update_weight_query, (data.cart_id,))
+            conn.commit()
+
+        close_conn(conn)
+        return jsonify(MessageResponse(message=f"Cart {data.cart_id} updated for product {data.product_id} with quantity {quantity}.").dict()), 200
+
+    except psycopg2.Error as db_err:
+        if conn: conn.rollback()
+        logger.error(f"DB error in /esp32/update_item: {db_err}")
+        return jsonify(ErrorResponse(detail=f"Database error: {str(db_err)}").dict()), 500
+    except Exception as e:
+        if conn: conn.rollback()
+        logger.error(f"Error in /esp32/update_item: {e}")
+        return jsonify(ErrorResponse(detail="Internal server error.").dict()), 500
+    finally:
+        if conn and not conn.closed:
+            close_conn(conn)
+
+@bp.route('/item/add', methods=['POST'])
 @jwt_required
-def remove_product_from_cart_route():
+def add_product_to_cart_route():
     user_id = get_current_user_id()
-    if not user_id: return jsonify(ErrorResponse(detail='Authentication required.').dict()), 401
-    
+    if not user_id:
+        return jsonify(ErrorResponse(detail='Authentication required.').dict()), 401
+        
     try:
-        data = CartItemRemoveRequest(**request.json)
+        data = CartItemAddRequest(**request.json)
     except ValidationError as e:
         return handle_pydantic_error(e)
 
@@ -314,37 +349,95 @@ def remove_product_from_cart_route():
         from app.db import get_conn, close_conn
         conn = get_conn()
         with conn.cursor() as cur:
-            # Get user's active cart_id using the existing cursor for the transaction
+            # Get the user's cart_id
             cur.execute("SELECT cart_id FROM public.total_carts WHERE user_id = %s LIMIT 1;", (user_id,))
-            cart_id_row = cur.fetchone()
-            if not cart_id_row: 
-                close_conn(conn)
-                return jsonify(ErrorResponse(detail='No active cart found for user.').dict()), 404
-            cart_id = cart_id_row[0]
+            cart_row = cur.fetchone()
+            if not cart_row:
+                return jsonify(ErrorResponse(detail="No active cart found for user.").dict()), 404
+            cart_id = cart_row[0]
 
-            get_qty_query = "SELECT quantity FROM public.cart_items WHERE cart_id = %s AND product_id = %s;"
-            cur.execute(get_qty_query, (cart_id, data.product_id))
-            item_row = cur.fetchone()
-
-            if not item_row:
-                close_conn(conn)
-                return jsonify(ErrorResponse(detail=f'Product {data.product_id} not found in cart.').dict()), 404
-            current_quantity = item_row[0]
-            
-            if current_quantity > 1:
-                update_qty_query = "UPDATE public.cart_items SET quantity = quantity - 1 WHERE cart_id = %s AND product_id = %s;"
-                cur.execute(update_qty_query, (cart_id, data.product_id))
-            else:
-                delete_item_query = "DELETE FROM public.cart_items WHERE cart_id = %s AND product_id = %s;"
-                cur.execute(delete_item_query, (cart_id, data.product_id))
+            # Upsert logic: add 1 to quantity if exists, else insert with quantity 1
+            upsert_query = """
+            INSERT INTO public.cart_items (cart_id, product_id, quantity)
+            VALUES (%s, %s, 1)
+            ON CONFLICT (cart_id, product_id)
+            DO UPDATE SET quantity = cart_items.quantity + 1;
+            """
+            cur.execute(upsert_query, (cart_id, data.product_id))
             conn.commit()
+
         close_conn(conn)
-        return jsonify(MessageResponse(message=f'Product {data.product_id} quantity updated/removed from cart {cart_id}.').dict()), 200
-    except Exception as e:
-        logger.error(f"Error removing item {data.product_id if 'data' in locals() else 'N/A'} from cart: {e}")
+        return jsonify(MessageResponse(message=f"Product {data.product_id} added to cart.").dict()), 200
+
+    except psycopg2.Error as db_err:
         if conn: conn.rollback()
-        if conn and not conn.closed: close_conn(conn)
-        return jsonify(ErrorResponse(detail='Internal server error').dict()), 500
+        logger.error(f"DB error adding product {data.product_id} for user {user_id}: {db_err}")
+        return jsonify(ErrorResponse(detail=f"Database error: {str(db_err)}").dict()), 500
+    except Exception as e:
+        if conn: conn.rollback()
+        logger.error(f"Error adding product {data.product_id} for user {user_id}: {e}")
+        return jsonify(ErrorResponse(detail="Internal server error.").dict()), 500
+    finally:
+        if conn and not conn.closed:
+            close_conn(conn)
+
+# API 21: Remove one item from Cart
+@bp.route('/item/remove', methods=['POST'])
+@jwt_required
+def remove_product_from_cart_route():
+    user_id = get_current_user_id()
+    if not user_id:
+        return jsonify(ErrorResponse(detail='Authentication required.').dict()), 401
+        
+    try:
+        data = CartItemRemoveRequest(**request.json)
+    except ValidationError as e:
+        return handle_pydantic_error(e)
+    
+    conn = None
+    try:
+        from app.db import get_conn, close_conn
+        conn = get_conn()
+        with conn.cursor() as cur:
+            # Get the user's cart_id
+            cur.execute("SELECT cart_id FROM public.total_carts WHERE user_id = %s LIMIT 1;", (user_id,))
+            cart_row = cur.fetchone()
+            if not cart_row:
+                return jsonify(ErrorResponse(detail="No active cart found for user.").dict()), 404
+            cart_id = cart_row[0]
+
+            # Check current quantity
+            cur.execute("SELECT quantity FROM public.cart_items WHERE cart_id = %s AND product_id = %s;", (cart_id, data.product_id))
+            item_row = cur.fetchone()
+            
+            if not item_row:
+                return jsonify(ErrorResponse(detail=f"Product {data.product_id} not found in cart.").dict()), 404
+
+            if item_row[0] > 1:
+                # Decrement quantity by 1
+                update_query = "UPDATE public.cart_items SET quantity = quantity - 1 WHERE cart_id = %s AND product_id = %s;"
+                cur.execute(update_query, (cart_id, data.product_id))
+            else:
+                # If quantity is 1, remove the item completely
+                delete_query = "DELETE FROM public.cart_items WHERE cart_id = %s AND product_id = %s;"
+                cur.execute(delete_query, (cart_id, data.product_id))
+
+            conn.commit()
+            
+        close_conn(conn)
+        return jsonify(MessageResponse(message=f"Product {data.product_id} removed from cart.").dict()), 200
+        
+    except psycopg2.Error as db_err:
+        if conn: conn.rollback()
+        logger.error(f"DB error removing product {data.product_id} for user {user_id}: {db_err}")
+        return jsonify(ErrorResponse(detail=f"Database error: {str(db_err)}").dict()), 500
+    except Exception as e:
+        if conn: conn.rollback()
+        logger.error(f"Error removing product {data.product_id} for user {user_id}: {e}")
+        return jsonify(ErrorResponse(detail="Internal server error.").dict()), 500
+    finally:
+        if conn and not conn.closed:
+            close_conn(conn)
 
 # API 22: Disconnect Cart
 @bp.route('/disconnect', methods=['POST'])
