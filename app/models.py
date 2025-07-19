@@ -115,6 +115,11 @@ class Recipe(BaseModel):
     class Config:
         from_attributes = True
 
+class RecipeDetailResponse(BaseModel):
+    recipe_id: int
+    recipe_name: str
+    products: List[Product]
+
 # --- Offer Models ---
 class OfferResponse(BaseModel):
     offers: List[Product]

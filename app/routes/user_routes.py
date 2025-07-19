@@ -2,7 +2,7 @@ from flask import Blueprint, request, jsonify
 from pydantic import ValidationError
 from app.models import (
     ChecklistItemCreate, ChecklistItemResponse, ChecklistResponse, 
-    Recipe as RecipeModel, Product as ProductModel, 
+    Recipe as RecipeModel, Product as ProductModel, RecipeDetailResponse,
     ErrorResponse, MessageResponse
 )
 from app.db import execute_query
@@ -246,45 +246,54 @@ def show_recipes():
 @jwt_required # Or make public if recipe details are not user-specific beyond the ID
 def show_recipe_details(recipe_id):
     query = """
-    SELECT r.recipe_id, r.recipe_name, r.product_id,
-           p.product_name as p_name, p.price, p.discounted_price, p.barcode, p.weight, p.expiry, p.category_id, p.offer_name
+    SELECT r.recipe_id, r.recipe_name,
+           p.product_id, p.product_name, p.price, p.discounted_price, p.barcode, p.weight, p.expiry, p.category_id, p.offer_name
     FROM public.recipe r
     JOIN public.product p ON r.product_id = p.product_id
     WHERE r.recipe_id = %s;
     """
+    
+    conn = None
     try:
-        conn = None
-        recipe_obj = None
         from app.db import get_conn, close_conn
         conn = get_conn()
         with conn.cursor() as cur:
             cur.execute(query, (recipe_id,))
-            row = cur.fetchone()
-            if row:
-                serialized_recipe = serialize_row(row, cur.description)
+            rows = cur.fetchall()
+            if not rows:
+                close_conn(conn)
+                return jsonify(ErrorResponse(detail=f'Recipe with id {recipe_id} not found.').dict()), 404
+            
+            recipe_name = rows[0][1] # Get recipe name from the first row
+            products = []
+            for row_data in rows:
+                serialized_product = serialize_row(row_data, cur.description)
                 product_details = {
-                    'product_id': serialized_recipe['product_id'],
-                    'product_name': serialized_recipe['p_name'],
-                    'price': serialized_recipe['price'],
-                    'discounted_price': serialized_recipe.get('discounted_price'),
-                    'barcode': serialized_recipe['barcode'],
-                    'weight': serialized_recipe.get('weight'),
-                    'expiry': serialized_recipe.get('expiry'),
-                    'category_id': serialized_recipe.get('category_id'),
-                    'offer_name': serialized_recipe.get('offer_name')
+                    'product_id': serialized_product['product_id'],
+                    'product_name': serialized_product['product_name'],
+                    'price': serialized_product['price'],
+                    'discounted_price': serialized_product.get('discounted_price'),
+                    'barcode': serialized_product['barcode'],
+                    'weight': serialized_product.get('weight'),
+                    'expiry': serialized_product.get('expiry'),
+                    'category_id': serialized_product.get('category_id'),
+                    'offer_name': serialized_product.get('offer_name')
                 }
-                recipe_obj = RecipeModel(
-                    recipe_id=serialized_recipe['recipe_id'],
-                    recipe_name=serialized_recipe['recipe_name'],
-                    product_id=serialized_recipe['product_id'],
-                    product=ProductModel(**product_details)
-                )
-        if recipe_obj:
-            return jsonify(recipe_obj.dict()), 200
-        else:
-            return jsonify(ErrorResponse(detail=f'Recipe with id {recipe_id} not found.').dict()), 404
+                products.append(ProductModel(**product_details))
+
+        recipe_response = RecipeDetailResponse(
+            recipe_id=recipe_id,
+            recipe_name=recipe_name,
+            products=products
+        )
+        close_conn(conn)
+        return jsonify(recipe_response.dict()), 200
+
     except Exception as e:
-        logger.error(f"Error fetching recipe details for recipe_id {recipe_id}: {e}")
+        logger.error(f"Error fetching details for recipe {recipe_id}: {e}")
+        if conn and not conn.closed: close_conn(conn)
         return jsonify(ErrorResponse(detail='Internal server error').dict()), 500
-    finally:
-        if conn: close_conn(conn) 
+
+# API to get user's food and allergy preferences
+@bp.route('/preferences', methods=['GET'])
+# ... existing code ...
