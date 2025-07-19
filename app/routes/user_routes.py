@@ -186,6 +186,7 @@ def show_recipes():
 
     product_ids_query = product_ids_query_template.format(table_name=table_name, user_or_cart_id_column=id_column)
     
+    conn = None
     try:
         product_id_rows = execute_query(product_ids_query, (id_value,), fetchall=True)
         if not product_id_rows:
@@ -205,7 +206,6 @@ def show_recipes():
         WHERE r.product_id = ANY(%s);
         """
         
-        conn = None
         recipes_data = []
         from app.db import get_conn, close_conn
         conn = get_conn()
@@ -294,6 +294,3 @@ def show_recipe_details(recipe_id):
         if conn and not conn.closed: close_conn(conn)
         return jsonify(ErrorResponse(detail='Internal server error').dict()), 500
 
-# API to get user's food and allergy preferences
-@bp.route('/preferences', methods=['GET'])
-# ... existing code ...
