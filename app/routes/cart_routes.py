@@ -444,35 +444,38 @@ def remove_product_from_cart_route():
 @jwt_required
 def disconnect_cart_route():
     user_id = get_current_user_id()
-    if not user_id: return jsonify(ErrorResponse(detail='Authentication required.').dict()), 401
+    if not user_id:
+        return jsonify(ErrorResponse(detail='Authentication required.').dict()), 401
 
     conn = None
     try:
         from app.db import get_conn, close_conn
         conn = get_conn()
         with conn.cursor() as cur:
-            cur.execute("SELECT cart_id FROM public.total_carts WHERE user_id = %s LIMIT 1;", (user_id,))
-            cart_id_row = cur.fetchone()
-            if not cart_id_row:
-                close_conn(conn)
-                return jsonify(ErrorResponse(detail='No active cart found for this user to disconnect.').dict()), 404
-            cart_id = cart_id_row[0]
-
-            delete_cart_query = "DELETE FROM public.total_carts WHERE cart_id = %s AND user_id = %s;"
-            cur.execute(delete_cart_query, (cart_id, user_id))
+            # Set user_id to NULL for the user's cart and return the cart_id that was disconnected
+            update_query = """
+            UPDATE public.total_carts
+            SET user_id = NULL
+            WHERE user_id = %s
+            RETURNING cart_id;
+            """
+            cur.execute(update_query, (user_id,))
+            disconnected_cart_row = cur.fetchone()
             conn.commit()
             
-            cur.execute("SELECT cart_id FROM public.total_carts WHERE cart_id = %s;", (cart_id,))
-            still_exists = cur.fetchone()
         close_conn(conn)
 
-        if not still_exists:
-             return jsonify(MessageResponse(message=f'Cart {cart_id} disconnected and cleared successfully.').dict()), 200
+        if disconnected_cart_row:
+            cart_id = disconnected_cart_row[0]
+            return jsonify(MessageResponse(message=f'Cart {cart_id} disconnected successfully.').dict()), 200
         else:
-            logger.warning(f"Cart {cart_id} was not deleted upon disconnect attempt for user {user_id}")
-            return jsonify(ErrorResponse(detail='Failed to disconnect cart. Cart might still exist.').dict()), 500
+            # This case means the user was not connected to any cart to begin with.
+            return jsonify(ErrorResponse(detail='No active cart found for this user to disconnect.').dict()), 404
+
     except Exception as e:
         logger.error(f"Error disconnecting cart for user {user_id}: {e}")
-        if conn: conn.rollback()
-        if conn and not conn.closed: close_conn(conn)
+        if conn:
+            conn.rollback()
+            if not conn.closed:
+                close_conn(conn)
         return jsonify(ErrorResponse(detail='Internal server error during disconnect.').dict()), 500 
