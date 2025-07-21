@@ -274,13 +274,13 @@ def get_shortest_path_route():
             start_x, start_y = start_pos_raw[0], start_pos_raw[1]
 
             # 2. Fetch all store sections to build the navigation grid
-            cur.execute("SELECT section_name, x_start, y_start, x_end, y_end FROM public.store_sections;")
+            cur.execute("SELECT section_name, x1, y1, x2, y2 FROM public.store_sections;")
             sections_raw = cur.fetchall()
             sections = [serialize_row(row, cur.description) for row in sections_raw]
 
             # 3. Determine grid size
-            max_x = max(s['x_end'] for s in sections) if sections else 100
-            max_y = max(s['y_end'] for s in sections) if sections else 100
+            max_x = max(s['x2'] for s in sections) if sections else 100
+            max_y = max(s['y2'] for s in sections) if sections else 100
             
             # 4. Create grid and A* solver
             grid = create_grid_from_db(sections, max_x, max_y, resolution=1)
