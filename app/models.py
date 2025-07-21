@@ -206,8 +206,6 @@ class ProductLocation(BaseModel):
         from_attributes = True
 
 class ShortestPathRequest(BaseModel):
-    start_x: float
-    start_y: float
     destinations: List[Dict[str, float]]
 
 class PathSegment(BaseModel):

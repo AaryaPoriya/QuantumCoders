@@ -258,25 +258,39 @@ def get_shortest_path_route():
         from app.db import get_conn, close_conn
         conn = get_conn()
         with conn.cursor() as cur:
-            # 1. Fetch all store sections to build the navigation grid
-            cur.execute("SELECT section_name, x1, y1, x2, y2 FROM public.store_sections;")
+            # 1. Get the user's cart and its location
+            cur.execute("""
+                SELECT cl.x_coord, cl.y_coord 
+                FROM public.total_carts tc
+                JOIN public.cart_locations cl ON tc.cart_id = cl.cart_id
+                WHERE tc.user_id = %s
+                ORDER BY cl.updated_at DESC
+                LIMIT 1;
+            """, (user_id,))
+            start_pos_raw = cur.fetchone()
+            if not start_pos_raw:
+                return jsonify(ErrorResponse(detail='Could not find a connected cart with a location for the user.').dict()), 404
+            
+            start_x, start_y = start_pos_raw[0], start_pos_raw[1]
+
+            # 2. Fetch all store sections to build the navigation grid
+            cur.execute("SELECT section_name, x_start, y_start, x_end, y_end FROM public.store_sections;")
             sections_raw = cur.fetchall()
             sections = [serialize_row(row, cur.description) for row in sections_raw]
 
-            # 2. Determine grid size
-            max_x = max(s['x2'] for s in sections) if sections else 100
-            max_y = max(s['y2'] for s in sections) if sections else 100
+            # 3. Determine grid size
+            max_x = max(s['x_end'] for s in sections) if sections else 100
+            max_y = max(s['y_end'] for s in sections) if sections else 100
             
-            # 3. Create grid and A* solver
+            # 4. Create grid and A* solver
             grid = create_grid_from_db(sections, max_x, max_y, resolution=1)
             astar = AStar(grid)
             
-            # 4. Calculate path
+            # 5. Calculate path
             full_path = []
-            current_pos = (data.start_x, data.start_y)
+            current_pos = (start_x, start_y)
             
-            # Sort destinations based on proximity to the current location (Greedy approach)
-            # This is a simple heuristic. For a true TSP solution, a more complex algorithm is needed.
+            # Sort destinations based on proximity to the current location
             sorted_destinations = sorted(
                 data.destinations, 
                 key=lambda p: ((p['x'] - current_pos[0])**2 + (p['y'] - current_pos[1])**2)**0.5
