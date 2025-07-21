@@ -19,9 +19,10 @@ class AStar:
             return None # End node is out of bounds
         if self.grid[start_node[0]][start_node[1]] == 1:
             return None # Start node is on an obstacle
+        
+        # Allow the end node to be an obstacle. The path will lead to the closest walkable node.
         if self.grid[end_node[0]][end_node[1]] == 1:
-            return None # End node is on an obstacle
-
+            self.grid[end_node[0]][end_node[1]] = 0 # Temporarily mark as walkable to find a path to it
 
         open_set = []
         heapq.heappush(open_set, (0, start_node))
@@ -35,6 +36,7 @@ class AStar:
             _, current = heapq.heappop(open_set)
 
             if current == end_node:
+                self.grid[end_node[0]][end_node[1]] = 1 # Restore obstacle if it was one
                 return self.reconstruct_path(came_from, current)
 
             for dr, dc in [(0, 1), (0, -1), (1, 0), (-1, 0), (1, 1), (1, -1), (-1, 1), (-1, -1)]:
@@ -52,6 +54,8 @@ class AStar:
                         f_score[neighbor] = tentative_g_score + self.heuristic(neighbor, end_node)
                         if neighbor not in [i[1] for i in open_set]:
                             heapq.heappush(open_set, (f_score[neighbor], neighbor))
+        
+        self.grid[end_node[0]][end_node[1]] = 1 # Restore obstacle if it was one
         return None
 
     def heuristic(self, a, b):
