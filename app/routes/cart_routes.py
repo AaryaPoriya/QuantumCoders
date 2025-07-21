@@ -325,7 +325,7 @@ def get_shortest_path_route():
                 return jsonify(ErrorResponse(detail='Could not calculate a valid path.').dict()), 422
             
             # 6. Enrich path with instructions and section IDs
-            enriched_path = enrich_path(full_path_coords, product_locations, sections)
+            enriched_path = enrich_path(full_path_coords, product_locations)
             response_path = [PathSegment(**p) for p in enriched_path]
 
         close_conn(conn)
