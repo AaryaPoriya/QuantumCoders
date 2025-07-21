@@ -314,7 +314,9 @@ def get_shortest_path_route():
                         # Un-scale the coordinates back to the original format
                         full_path.append(PathSegment(x=p[1] / resolution, y=p[0] / resolution))
                     
-                    current_pos = destination_pos # Update start for the next segment
+                    # THE FIX: Update current_pos to the actual end of the found path
+                    last_point_scaled = segment[-1]
+                    current_pos = (last_point_scaled[1] / resolution, last_point_scaled[0] / resolution)
                 else:
                     logger.warning(f"Could not find path from {current_pos} to {destination_pos}")
 
