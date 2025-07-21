@@ -282,15 +282,16 @@ def get_shortest_path_route():
             max_x = max(s['x2'] for s in sections) if sections else 100
             max_y = max(s['y2'] for s in sections) if sections else 100
             
-            # 4. Create grid and A* solver
-            grid = create_grid_from_db(sections, max_x, max_y, resolution=1)
+            # 4. Create grid and A* solver with a higher resolution
+            resolution = 10  # 10 cells per unit, allowing for finer paths
+            grid = create_grid_from_db(sections, max_x, max_y, resolution=resolution)
             astar = AStar(grid)
             
             # 5. Calculate path
             full_path = []
             current_pos = (start_x, start_y)
             
-            # Sort destinations based on proximity to the current location
+            # Sort destinations based on proximity
             sorted_destinations = sorted(
                 data.destinations, 
                 key=lambda p: ((p['x'] - current_pos[0])**2 + (p['y'] - current_pos[1])**2)**0.5
@@ -298,21 +299,30 @@ def get_shortest_path_route():
 
             for dest in sorted_destinations:
                 destination_pos = (dest['x'], dest['y'])
-                segment = astar.find_path(current_pos, destination_pos)
+
+                # Scale coordinates for the high-resolution grid
+                start_scaled = (current_pos[0] * resolution, current_pos[1] * resolution)
+                end_scaled = (destination_pos[0] * resolution, destination_pos[1] * resolution)
+                
+                segment = astar.find_path(start_scaled, end_scaled)
                 
                 if segment:
-                    full_path.extend(segment)
-                    current_pos = destination_pos # Next start is the current end
+                    # A* returns grid coordinates (row, col) which are (y, x).
+                    # We skip the first point of subsequent segments to avoid duplication.
+                    segment_to_add = segment if not full_path else segment[1:]
+                    for p in segment_to_add:
+                        # Un-scale the coordinates back to the original format
+                        full_path.append(PathSegment(x=p[1] / resolution, y=p[0] / resolution))
+                    
+                    current_pos = destination_pos # Update start for the next segment
                 else:
-                    # If any segment is not found, we can decide to either stop or skip.
-                    # Here, we'll log it and skip to the next destination.
                     logger.warning(f"Could not find path from {current_pos} to {destination_pos}")
 
             if not full_path:
                 return jsonify(ErrorResponse(detail='Could not calculate a valid path.').dict()), 422
             
-            # Convert path coordinates to PathSegment objects
-            response_path = [PathSegment(x=p[1], y=p[0]) for p in full_path]
+            # The full_path is now a list of PathSegment objects
+            response_path = full_path
 
         close_conn(conn)
         return jsonify(ShortestPathResponse(path=response_path).dict()), 200
