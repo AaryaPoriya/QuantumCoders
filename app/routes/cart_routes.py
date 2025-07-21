@@ -271,7 +271,7 @@ def get_shortest_path_route():
             if not start_pos_raw:
                 return jsonify(ErrorResponse(detail='Could not find a connected cart with a location for the user.').dict()), 404
             
-            start_x, start_y = start_pos_raw[0], start_pos_raw[1]
+            start_x, start_y = float(start_pos_raw[0]), float(start_pos_raw[1])
 
             # 2. Fetch all store sections to build the navigation grid
             cur.execute("SELECT section_name, x1, y1, x2, y2 FROM public.store_sections;")
