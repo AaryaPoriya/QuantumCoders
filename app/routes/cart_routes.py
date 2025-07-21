@@ -10,6 +10,7 @@ from app.models import (
 from app.db import execute_query
 from app.auth import jwt_required, get_current_user_id
 from app.utils import handle_pydantic_error, serialize_row, serialize_rows
+from app.pathfinding import AStar, create_grid_from_db
 import logging
 import psycopg2 # For specific error handling
 
@@ -239,25 +240,73 @@ def get_product_locations_route():
         if conn and not conn.closed: close_conn(conn)
         return jsonify(ErrorResponse(detail='Internal server error').dict()), 500
 
-# API 18: Get Shortest Path (Placeholder)
+# API 18: Get Shortest Path
 @bp.route('/shortest_path', methods=['POST'])
 @jwt_required
 def get_shortest_path_route():
+    user_id = get_current_user_id()
+    if not user_id:
+        return jsonify(ErrorResponse(detail='Authentication required.').dict()), 401
+    
     try:
         data = ShortestPathRequest(**request.json)
     except ValidationError as e:
         return handle_pydantic_error(e)
-    
-    logger.info(f"Shortest path requested from ({data.start_x},{data.start_y}) to {data.destinations}")
-    dummy_path = [
-        PathSegment(x=data.start_x + 1, y=data.start_y + 1, instruction="Go forward"),
-        PathSegment(x=data.start_x + 2, y=data.start_y + 2, instruction="Turn left at next aisle")
-    ]
-    if data.destinations:
-        last_dest_coords = data.destinations[-1]
-        dummy_path.append(PathSegment(x=last_dest_coords.get('x', data.start_x+3), y=last_dest_coords.get('y',data.start_y+3), instruction="You have arrived"))
 
-    return jsonify(ShortestPathResponse(path=dummy_path).dict()), 200
+    conn = None
+    try:
+        from app.db import get_conn, close_conn
+        conn = get_conn()
+        with conn.cursor() as cur:
+            # 1. Fetch all store sections to build the navigation grid
+            cur.execute("SELECT section_name, x1, y1, x2, y2 FROM public.store_sections;")
+            sections_raw = cur.fetchall()
+            sections = [serialize_row(row, cur.description) for row in sections_raw]
+
+            # 2. Determine grid size
+            max_x = max(s['x2'] for s in sections) if sections else 100
+            max_y = max(s['y2'] for s in sections) if sections else 100
+            
+            # 3. Create grid and A* solver
+            grid = create_grid_from_db(sections, max_x, max_y, resolution=1)
+            astar = AStar(grid)
+            
+            # 4. Calculate path
+            full_path = []
+            current_pos = (data.start_x, data.start_y)
+            
+            # Sort destinations based on proximity to the current location (Greedy approach)
+            # This is a simple heuristic. For a true TSP solution, a more complex algorithm is needed.
+            sorted_destinations = sorted(
+                data.destinations, 
+                key=lambda p: ((p['x'] - current_pos[0])**2 + (p['y'] - current_pos[1])**2)**0.5
+            )
+
+            for dest in sorted_destinations:
+                destination_pos = (dest['x'], dest['y'])
+                segment = astar.find_path(current_pos, destination_pos)
+                
+                if segment:
+                    full_path.extend(segment)
+                    current_pos = destination_pos # Next start is the current end
+                else:
+                    # If any segment is not found, we can decide to either stop or skip.
+                    # Here, we'll log it and skip to the next destination.
+                    logger.warning(f"Could not find path from {current_pos} to {destination_pos}")
+
+            if not full_path:
+                return jsonify(ErrorResponse(detail='Could not calculate a valid path.').dict()), 422
+            
+            # Convert path coordinates to PathSegment objects
+            response_path = [PathSegment(x=p[1], y=p[0]) for p in full_path]
+
+        close_conn(conn)
+        return jsonify(ShortestPathResponse(path=response_path).dict()), 200
+
+    except Exception as e:
+        logger.error(f"Error calculating shortest path for user {user_id}: {e}")
+        if conn and not conn.closed: close_conn(conn)
+        return jsonify(ErrorResponse(detail='Internal server error').dict()), 500
 
 # API 20: Add/Update Item in Cart (from ESP32)
 @bp.route('/esp32/update_item', methods=['POST'])
