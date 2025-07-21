@@ -202,7 +202,7 @@ def get_product_locations_route():
            ss.section_name, ss.x1, ss.y1, ss.x2, ss.y2, ss.floor_level
     FROM public.product_locations pl
     JOIN public.store_sections ss ON pl.section_id = ss.section_id
-    WHERE pl.product_id = ANY(%s);
+    WHERE pl.product_id IN %s;
     """
     conn = None
     try:
@@ -210,7 +210,7 @@ def get_product_locations_route():
         conn = get_conn()
         locations_data = []
         with conn.cursor() as cur:
-            cur.execute(query, (product_ids,))
+            cur.execute(query, (tuple(product_ids),))
             rows = cur.fetchall()
             if rows:
                 for row_data in rows:
