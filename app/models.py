@@ -205,8 +205,11 @@ class ProductLocation(BaseModel):
     class Config:
         from_attributes = True
 
+class DestinationRequest(BaseModel):
+    product_id: int
+
 class ShortestPathRequest(BaseModel):
-    destinations: List[Dict[str, float]]
+    destinations: List[DestinationRequest]
 
 class PathSegment(BaseModel):
     x: float

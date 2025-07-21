@@ -11,6 +11,7 @@ from app.db import execute_query
 from app.auth import jwt_required, get_current_user_id
 from app.utils import handle_pydantic_error, serialize_row, serialize_rows
 from app.pathfinding import AStar, create_grid_from_db
+from app.routing_utils import enrich_path
 import logging
 import psycopg2 # For specific error handling
 
@@ -274,57 +275,58 @@ def get_shortest_path_route():
             start_x, start_y = float(start_pos_raw[0]), float(start_pos_raw[1])
 
             # 2. Fetch all store sections to build the navigation grid
-            cur.execute("SELECT section_name, x1, y1, x2, y2 FROM public.store_sections;")
+            cur.execute("SELECT section_id, section_name, x1, y1, x2, y2 FROM public.store_sections;")
             sections_raw = cur.fetchall()
             sections = [serialize_row(row, cur.description) for row in sections_raw]
 
-            # 3. Determine grid size
+            # 3. Fetch product locations for the destinations
+            product_ids = [dest.product_id for dest in data.destinations]
+            cur.execute("SELECT product_id, x_coord, y_coord, section_id FROM public.product_locations WHERE product_id = ANY(%s);", (product_ids,))
+            product_locs_raw = cur.fetchall()
+            product_locations = {row[0]: serialize_row(row, cur.description) for row in product_locs_raw}
+
+            # 4. Determine grid size and create solver
             max_x = max(s['x2'] for s in sections) if sections else 100
             max_y = max(s['y2'] for s in sections) if sections else 100
-            
-            # 4. Create grid and A* solver with a higher resolution
-            resolution = 10  # 10 cells per unit, allowing for finer paths
+            resolution = 10
             grid = create_grid_from_db(sections, max_x, max_y, resolution=resolution)
             astar = AStar(grid)
             
             # 5. Calculate path
-            full_path = []
+            full_path_coords = []
             current_pos = (start_x, start_y)
             
-            # Sort destinations based on proximity
+            dest_coords = [
+                (p_id, product_locations[p_id]['x_coord'], product_locations[p_id]['y_coord']) 
+                for p_id in product_ids if p_id in product_locations
+            ]
+            
             sorted_destinations = sorted(
-                data.destinations, 
-                key=lambda p: ((p['x'] - current_pos[0])**2 + (p['y'] - current_pos[1])**2)**0.5
+                dest_coords, 
+                key=lambda p: ((p[1] - current_pos[0])**2 + (p[2] - current_pos[1])**2)**0.5
             )
 
-            for dest in sorted_destinations:
-                destination_pos = (dest['x'], dest['y'])
-
-                # Scale coordinates for the high-resolution grid
+            for _, dest_x, dest_y in sorted_destinations:
+                destination_pos = (dest_x, dest_y)
                 start_scaled = (current_pos[0] * resolution, current_pos[1] * resolution)
                 end_scaled = (destination_pos[0] * resolution, destination_pos[1] * resolution)
-                
                 segment = astar.find_path(start_scaled, end_scaled)
                 
                 if segment:
-                    # A* returns grid coordinates (row, col) which are (y, x).
-                    # We skip the first point of subsequent segments to avoid duplication.
-                    segment_to_add = segment if not full_path else segment[1:]
+                    segment_to_add = segment if not full_path_coords else segment[1:]
                     for p in segment_to_add:
-                        # Un-scale the coordinates back to the original format
-                        full_path.append(PathSegment(x=p[1] / resolution, y=p[0] / resolution))
-                    
-                    # THE FIX: Update current_pos to the actual end of the found path
+                        full_path_coords.append({'x': p[1] / resolution, 'y': p[0] / resolution})
                     last_point_scaled = segment[-1]
                     current_pos = (last_point_scaled[1] / resolution, last_point_scaled[0] / resolution)
                 else:
                     logger.warning(f"Could not find path from {current_pos} to {destination_pos}")
 
-            if not full_path:
+            if not full_path_coords:
                 return jsonify(ErrorResponse(detail='Could not calculate a valid path.').dict()), 422
             
-            # The full_path is now a list of PathSegment objects
-            response_path = full_path
+            # 6. Enrich path with instructions and section IDs
+            enriched_path = enrich_path(full_path_coords, product_locations, sections)
+            response_path = [PathSegment(**p) for p in enriched_path]
 
         close_conn(conn)
         return jsonify(ShortestPathResponse(path=response_path).dict()), 200
