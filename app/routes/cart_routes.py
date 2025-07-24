@@ -104,11 +104,13 @@ def astar(start_node, goal_node):
     while open_set:
         _, current = heappop(open_set)
 
-        if current == goal_node:
-            path = [current]
+        # Use a distance-based check for termination, which is robust for floating points.
+        if math.dist(current, goal_node) < GRID_RES:
+            path = [goal_node] # Ensure the final point is exactly the goal
             while current in came_from:
-                current = came_from[current]
                 path.append(current)
+                current = came_from[current]
+            path.append(start_node)
             return path[::-1]
 
         cx, cy = current
