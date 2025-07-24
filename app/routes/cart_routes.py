@@ -10,8 +10,6 @@ from app.models import (
 from app.db import execute_query
 from app.auth import jwt_required, get_current_user_id
 from app.utils import handle_pydantic_error, serialize_row, serialize_rows
-from app.pathfinding import AStar, create_grid_from_db
-from app.routing_utils import enrich_path
 import logging
 import psycopg2 # For specific error handling
 import math
