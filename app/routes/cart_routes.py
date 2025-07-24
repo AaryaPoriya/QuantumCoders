@@ -315,8 +315,10 @@ def get_shortest_path_route():
     if not user_id:
         return jsonify(ErrorResponse(detail='Authentication required.').dict()), 401
     
-    conn = None
+    conn = None # Initialize conn to None
     try:
+        from app.db import get_conn, close_conn
+        conn = get_conn() # Get connection inside the try block
         with conn.cursor() as cur:
             # Get user's active cart location
             cur.execute("""
