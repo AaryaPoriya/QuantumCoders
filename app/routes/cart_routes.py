@@ -123,13 +123,23 @@ def astar(start_node, goal_node):
     return []
 
 def snap_to_section_center(section, prod_x, prod_y):
-    """Projects a product's coordinates onto the centerline of its own section."""
+    """
+    Snap a product's coordinates to the centerline of its section.
+    If the section is wider than tall (horizontal aisle), snap Y to centerline.
+    If the section is taller than wide (vertical aisle), snap X to centerline.
+    """
     x1, x2 = min(section['x1'], section['x2']), max(section['x1'], section['x2'])
     y1, y2 = min(section['y1'], section['y2']), max(section['y1'], section['y2'])
-    if (x2 - x1) > (y2 - y1): # Horizontal aisle
+
+    width = x2 - x1
+    height = y2 - y1
+
+    if width >= height:
+        # horizontal aisle: fix Y to centerline
         center_y = round((y1 + y2) / 2, 2)
         return (round(prod_x, 2), center_y)
-    else: # Vertical aisle
+    else:
+        # vertical aisle: fix X to centerline
         center_x = round((x1 + x2) / 2, 2)
         return (center_x, round(prod_y, 2))
 
