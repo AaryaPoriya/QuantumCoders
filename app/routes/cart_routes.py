@@ -77,12 +77,11 @@ def is_walkable(x, y):
 def heuristic(a, b):
     return abs(a[0] - b[0]) + abs(a[1] - b[1])
 
-def astar(start, goal):
-    start_node = find_nearest_centerline_node(start)
-    goal_node = find_nearest_centerline_node(goal)
-
+def astar(start_node, goal_node):
+    """
+    Finds the shortest path between two nodes that are already on the centerline.
+    """
     if not start_node or not goal_node:
-        logger.error(f"Could not snap start {start} or goal {goal} to a centerline.")
         return []
 
     open_set = []
@@ -107,7 +106,7 @@ def astar(start, goal):
             if not is_walkable(nx, ny):
                 continue
             
-            tentative_g = g_score[current] + GRID_RES
+            tentative_g = g_score.get(current, float('inf')) + GRID_RES
             
             if tentative_g < g_score.get((nx, ny), float('inf')):
                 came_from[(nx, ny)] = current
@@ -397,9 +396,17 @@ def get_shortest_path_route():
             path_segments = []
             current_path_start = start
             for pid, coords, sec_id in ordered_targets:
-                segment = astar(current_path_start, coords)
+                # Snap both start and goal to nearest centerline nodes
+                snapped_start = find_nearest_centerline_node(current_path_start)
+                snapped_goal = find_nearest_centerline_node(coords)
+
+                if not snapped_start or not snapped_goal:
+                    logger.warning(f"Could not snap path for product {pid}")
+                    continue
+
+                segment = astar(snapped_start, snapped_goal)
                 if not segment:
-                    logger.warning(f"Could not find path from {current_path_start} to {coords} for product {pid}")
+                    logger.warning(f"Could not find path from {snapped_start} to {snapped_goal} for product {pid}")
                     continue
 
                 path_segments.append({
@@ -410,7 +417,7 @@ def get_shortest_path_route():
                     "path": [{"x": p[0], "y": p[1]} for p in segment],
                     "last_instruction": f"You have arrived at section {sec_id}"
                 })
-                current_path_start = segment[-1]
+                current_path_start = snapped_goal # The next start is the snapped goal of the current segment
 
     finally:
         if conn and not conn.closed:
