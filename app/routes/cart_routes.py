@@ -122,6 +122,17 @@ def astar(start_node, goal_node):
                 heappush(open_set, (f, (nx, ny)))
     return []
 
+def snap_to_section_center(section, prod_x, prod_y):
+    """Projects a product's coordinates onto the centerline of its own section."""
+    x1, x2 = min(section['x1'], section['x2']), max(section['x1'], section['x2'])
+    y1, y2 = min(section['y1'], section['y2']), max(section['y1'], section['y2'])
+    if (x2 - x1) > (y2 - y1): # Horizontal aisle
+        center_y = round((y1 + y2) / 2, 2)
+        return (round(prod_x, 2), center_y)
+    else: # Vertical aisle
+        center_x = round((x1 + x2) / 2, 2)
+        return (center_x, round(prod_y, 2))
+
 # API 13: Connect Cart
 @bp.route('/connect', methods=['POST'])
 @jwt_required
@@ -398,16 +409,6 @@ def get_shortest_path_route():
             prod_locs_raw = cur.fetchall()
             prod_locs = {r[0]: {'x_coord': float(r[1]), 'y_coord': float(r[2]), 'section_id': r[3]} for r in prod_locs_raw}
             
-            # Add extra mock locations if needed for testing
-            test_mocks = {
-                2: {'x_coord': 1.3750, 'y_coord': 1.25, 'section_id': 1},
-                5: {'x_coord': 2.3125, 'y_coord': 1.48, 'section_id': 1},
-                23: {'x_coord': 3.25, 'y_coord': 1.25, 'section_id': 1}
-            }
-            for pid, loc in test_mocks.items():
-                if pid not in prod_locs:
-                    prod_locs[pid] = loc
-
             # Step 4: Order targets by nearest and calculate path
             targets = [(pid, (prod_locs[pid]['x_coord'], prod_locs[pid]['y_coord']), prod_locs[pid]['section_id']) for pid in product_ids if pid in prod_locs]
             
@@ -420,16 +421,26 @@ def get_shortest_path_route():
                 current_pos_for_sort = next_target[1]
 
             path_segments = []
-            current_path_start = start # Use the snapped start position
+            # Initialize the start of the first segment with the SNAPPED cart location.
+            current_path_start = start 
             for pid, coords, sec_id in ordered_targets:
-                # Goal is already snapped inside the loop
-                snapped_goal = find_nearest_centerline_node(coords)
-                
+                # Fetch section geometry for robust snapping
+                cur.execute("SELECT x1,y1,x2,y2 FROM public.store_sections WHERE section_id=%s", (sec_id,))
+                sec_row = cur.fetchone()
+                if not sec_row:
+                    logger.warning(f"Could not find section geometry for product {pid} in section {sec_id}")
+                    continue
+                section_geom = {'x1':float(sec_row[0]), 'y1':float(sec_row[1]), 'x2':float(sec_row[2]), 'y2':float(sec_row[3])}
+
+                # Snap the goal to its own section's centerline, then to the global graph.
+                section_snap = snap_to_section_center(section_geom, coords[0], coords[1])
+                snapped_goal = find_nearest_centerline_node(section_snap)
+
                 if not snapped_goal:
                     logger.warning(f"Could not snap goal for product {pid}")
                     continue
 
-                # The start of the segment is already guaranteed to be on the centerline
+                # The start point is already guaranteed to be on the centerline.
                 segment = astar(current_path_start, snapped_goal)
                 if not segment:
                     logger.warning(f"Could not find path from {current_path_start} to {snapped_goal} for product {pid}")
@@ -443,7 +454,8 @@ def get_shortest_path_route():
                     "path": [{"x": p[0], "y": p[1]} for p in segment],
                     "last_instruction": f"You have arrived at section {sec_id}"
                 })
-                current_path_start = snapped_goal # The next start is the snapped goal
+                # CRITICAL FIX: The start of the next segment is the snapped goal of this one.
+                current_path_start = snapped_goal
 
     finally:
         if conn and not conn.closed:
