@@ -290,6 +290,15 @@ def get_shortest_path_route():
             max_y = max(s['y2'] for s in sections) if sections else 100
             resolution = 10
             grid = create_grid_from_db(sections, max_x, max_y, resolution=resolution)
+
+            # Add the additional restricted zone to the grid
+            restricted_x1, restricted_y1 = int(0.750 * resolution), int(0.725 * resolution)
+            restricted_x2, restricted_y2 = int(3.250 * resolution), int(1.250 * resolution)
+            for r in range(restricted_y1, restricted_y2 + 1):
+                for c in range(restricted_x1, restricted_x2 + 1):
+                    if 0 <= r < len(grid) and 0 <= c < len(grid[0]):
+                        grid[r][c] = 1
+
             astar = AStar(grid)
             
             # 5. Calculate path
