@@ -14,8 +14,12 @@ class AStar:
 
         if not (0 <= start_node[0] < self.height and 0 <= start_node[1] < self.width):
             return None
+        
         if self.grid[start_node[0]][start_node[1]] == 1:
-            return None
+            accessible_start_node = find_closest_walkable_node(self.grid, start_node)
+            if accessible_start_node is None:
+                return None # No walkable node near start
+            start_node = accessible_start_node
 
         if not (0 <= end_node[0] < self.height and 0 <= end_node[1] < self.width):
             return None
