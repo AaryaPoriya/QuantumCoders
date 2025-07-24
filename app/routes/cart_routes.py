@@ -20,12 +20,19 @@ bp = Blueprint('cart', __name__, url_prefix='/cart')
 
 # ----------- CONFIG & PATHFINDING GLOBALS -----------
 GRID_RES = 0.05
+AISLE_HALF_WIDTH = 0.1  # ~10 cm band on either side
 CENTERLINE_SET = set() # Global set for walkable points
 
 # ----------- NEW PATHFINDING IMPLEMENTATION -----------
 
+def frange(start, stop, step):
+    """A range function that works with floats."""
+    while start <= stop + (step / 2): # Add tolerance for float comparison
+        yield round(start, 3)
+        start += step
+
 def build_centerline_graph(sections):
-    """Builds a robust, connected graph of all aisle centerlines."""
+    """Builds a 'thick' set of walkable aisle points."""
     global CENTERLINE_SET
     step = GRID_RES
     centerline_points = set()
@@ -33,7 +40,7 @@ def build_centerline_graph(sections):
     h_aisles = {} # {y_coord: [min_x, max_x]}
     v_aisles = {} # {x_coord: [min_y, max_y]}
 
-    # First, identify all horizontal and vertical aisle centerlines
+    # Identify horizontal and vertical aisle extents
     for sec in sections:
         x1, x2 = min(sec['x1'], sec['x2']), max(sec['x1'], sec['x2'])
         y1, y2 = min(sec['y1'], sec['y2']), max(sec['y1'], sec['y2'])
@@ -51,23 +58,29 @@ def build_centerline_graph(sections):
                 v_aisles[center_x][0] = min(v_aisles[center_x][0], y1)
                 v_aisles[center_x][1] = max(v_aisles[center_x][1], y2)
 
-    # Add all points along the identified aisle centerlines
+    # Build thick horizontal aisles
     for y, x_range in h_aisles.items():
         x = x_range[0]
         while x <= x_range[1]:
-            centerline_points.add((round(x, 2), y))
+            for offset in frange(-AISLE_HALF_WIDTH, AISLE_HALF_WIDTH, step):
+                centerline_points.add((round(x, 2), round(y + offset, 2)))
             x += step
 
+    # Build thick vertical aisles
     for x, y_range in v_aisles.items():
         y = y_range[0]
         while y <= y_range[1]:
-            centerline_points.add((x, round(y, 2)))
+            for offset in frange(-AISLE_HALF_WIDTH, AISLE_HALF_WIDTH, step):
+                centerline_points.add((round(x + offset, 2), round(y, 2)))
             y += step
             
-    # Crucially, add the intersection points of every h-aisle with every v-aisle
-    for y in h_aisles:
-        for x in v_aisles:
-            centerline_points.add((x, y))
+    # Crucially, add the intersection areas
+    for y_h in h_aisles:
+        for x_v in v_aisles:
+            for y_offset in frange(-AISLE_HALF_WIDTH, AISLE_HALF_WIDTH, step):
+                centerline_points.add((x_v, round(y_h + y_offset, 2)))
+            for x_offset in frange(-AISLE_HALF_WIDTH, AISLE_HALF_WIDTH, step):
+                centerline_points.add((round(x_v + x_offset, 2), y_h))
 
     CENTERLINE_SET = centerline_points
 
@@ -449,13 +462,13 @@ def get_shortest_path_route():
                 snapped_goal = find_nearest_centerline_node(section_snap)
 
                 if not snapped_start or not snapped_goal:
-                    logger.warning(f"Could not snap goal for product {pid}")
+                    logger.warning(f"Could not snap path for product {pid}")
                     continue
 
-                # The start point is already guaranteed to be on the centerline.
-                segment = astar(current_path_start, snapped_goal)
+                # Use the snapped_start variable for the A* call
+                segment = astar(snapped_start, snapped_goal)
                 if not segment:
-                    logger.warning(f"Could not find path from {current_path_start} to {snapped_goal} for product {pid}")
+                    logger.warning(f"Could not find path from {snapped_start} to {snapped_goal} for product {pid}")
                     continue
 
                 path_segments.append({
