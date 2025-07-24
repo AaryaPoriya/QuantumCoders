@@ -209,7 +209,7 @@ class DestinationRequest(BaseModel):
     product_id: int
 
 class ShortestPathRequest(BaseModel):
-    destinations: List[DestinationRequest]
+    destinations: List[Dict[str, int]] # Expects a list of {"product_id": X}
 
 class PathSegment(BaseModel):
     x: float

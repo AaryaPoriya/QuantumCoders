@@ -14,9 +14,77 @@ from app.pathfinding import AStar, create_grid_from_db
 from app.routing_utils import enrich_path
 import logging
 import psycopg2 # For specific error handling
+import math
+from heapq import heappush, heappop
 
 logger = logging.getLogger(__name__)
 bp = Blueprint('cart', __name__, url_prefix='/cart')
+
+# ----------- CONFIG (from user code) -----------
+GRID_RES = 0.1
+INNER_X1, INNER_X2 = 0.75, 3.25
+INNER_Y1, INNER_Y2 = 0.75, 1.25
+OUTER_X1, OUTER_X2 = 0.0, 4.0
+OUTER_Y1, OUTER_Y2 = 0.0, 2.0
+# ---------------------------------------------
+
+def is_walkable(x, y):
+    if not (OUTER_X1 <= x <= OUTER_X2 and OUTER_Y1 <= y <= OUTER_Y2):
+        return False
+    if INNER_X1 <= x <= INNER_X2 and INNER_Y1 <= y <= INNER_Y2:
+        return False
+    return True
+
+def heuristic(a, b):
+    return abs(a[0]-b[0]) + abs(a[1]-b[1])
+
+def astar(start, goal):
+    start = (round(start[0],2), round(start[1],2))
+    goal = (round(goal[0],2), round(goal[1],2))
+    
+    # If the goal isn't walkable, find the nearest walkable point.
+    if not is_walkable(goal[0], goal[1]):
+        q = [(goal[0], goal[1])]
+        visited = {goal}
+        found_walkable = False
+        while q:
+            cx, cy = q.pop(0)
+            for dx, dy in [(GRID_RES,0),(-GRID_RES,0),(0,GRID_RES),(0,-GRID_RES)]:
+                nx, ny = round(cx+dx,2), round(cy+dy,2)
+                if (nx,ny) in visited: continue
+                visited.add((nx,ny))
+                if is_walkable(nx,ny):
+                    goal = (nx,ny)
+                    found_walkable = True
+                    break
+                q.append((nx,ny))
+            if found_walkable: break
+        if not found_walkable: return []
+
+
+    open_set = []
+    heappush(open_set, (0, start))
+    came_from = {}
+    g_score = {start: 0}
+    while open_set:
+        _, current = heappop(open_set)
+        if math.dist(current, goal) < GRID_RES*1.1:
+            path = [current]
+            while current in came_from:
+                current = came_from[current]
+                path.append(current)
+            return path[::-1]
+        cx, cy = current
+        for dx, dy in [(GRID_RES,0),(-GRID_RES,0),(0,GRID_RES),(0,-GRID_RES)]:
+            nx, ny = round(cx+dx,2), round(cy+dy,2)
+            if not is_walkable(nx, ny): continue
+            tentative = g_score[current] + math.dist(current,(nx,ny))
+            if tentative < g_score.get((nx,ny), 1e9):
+                came_from[(nx,ny)] = current
+                g_score[(nx,ny)] = tentative
+                f = tentative + heuristic((nx,ny), goal)
+                heappush(open_set, (f, (nx,ny)))
+    return []
 
 # API 13: Connect Cart
 @bp.route('/connect', methods=['POST'])
@@ -249,92 +317,76 @@ def get_shortest_path_route():
     if not user_id:
         return jsonify(ErrorResponse(detail='Authentication required.').dict()), 401
     
-    try:
-        data = ShortestPathRequest(**request.json)
-    except ValidationError as e:
-        return handle_pydantic_error(e)
-
     conn = None
     try:
-        from app.db import get_conn, close_conn
-        conn = get_conn()
         with conn.cursor() as cur:
-            # 1. Get the user's cart and its location
+            # Get user's active cart location
             cur.execute("""
-                SELECT cl.x_coord, cl.y_coord 
+                SELECT cl.x_coord, cl.y_coord
                 FROM public.total_carts tc
                 JOIN public.cart_locations cl ON tc.cart_id = cl.cart_id
                 WHERE tc.user_id = %s
-                ORDER BY cl.updated_at DESC
-                LIMIT 1;
+                ORDER BY cl.updated_at DESC LIMIT 1;
             """, (user_id,))
-            start_pos_raw = cur.fetchone()
-            if not start_pos_raw:
-                return jsonify(ErrorResponse(detail='Could not find a connected cart with a location for the user.').dict()), 404
+            cart_loc_row = cur.fetchone()
+            if not cart_loc_row:
+                return jsonify({"error": "No active cart location found for user."}), 404
             
-            start_x, start_y = float(start_pos_raw[0]), float(start_pos_raw[1])
+            start = (float(cart_loc_row[0]), float(cart_loc_row[1]))
 
-            # 2. Fetch all store sections to build the navigation grid
-            cur.execute("SELECT section_id, section_name, x1, y1, x2, y2 FROM public.store_sections;")
-            sections_raw = cur.fetchall()
-            sections = [serialize_row(row, cur.description) for row in sections_raw]
+            # Get product IDs from request body
+            body = request.get_json()
+            product_ids = [d.get('product_id') for d in body.get('destinations', [])]
+            if not product_ids:
+                return jsonify({"error": "No destinations provided."}), 400
 
-            # 3. Fetch product locations for the destinations
-            product_ids = [dest.product_id for dest in data.destinations]
-            cur.execute("SELECT product_id, x_coord, y_coord, section_id FROM public.product_locations WHERE product_id = ANY(%s);", (product_ids,))
-            product_locs_raw = cur.fetchall()
-            product_locations = {row[0]: serialize_row(row, cur.description) for row in product_locs_raw}
-
-            # 4. Determine grid size and create solver
-            max_x = max(s['x2'] for s in sections) if sections else 100
-            max_y = max(s['y2'] for s in sections) if sections else 100
-            resolution = 10
-            grid = create_grid_from_db(sections, max_x, max_y, resolution=resolution)
-            astar = AStar(grid)
+            # Fetch product locations
+            cur.execute("""
+                SELECT product_id, x_coord, y_coord, section_id
+                FROM public.product_locations
+                WHERE product_id = ANY(%s)
+            """, (product_ids,))
+            prod_locs_raw = cur.fetchall()
+            prod_locs = {row[0]: {'x_coord': float(row[1]), 'y_coord': float(row[2]), 'section_id': row[3]} for row in prod_locs_raw}
             
-            # 5. Calculate path
-            full_path_coords = []
-            current_pos = (start_x, start_y)
-            
-            dest_coords = [
-                (p_id, product_locations[p_id]['x_coord'], product_locations[p_id]['y_coord']) 
-                for p_id in product_ids if p_id in product_locations
-            ]
-            
-            sorted_destinations = sorted(
-                dest_coords, 
-                key=lambda p: ((p[1] - current_pos[0])**2 + (p[2] - current_pos[1])**2)**0.5
-            )
+            # Order targets by nearest (greedy approach)
+            targets = [(pid, (prod_locs[pid]['x_coord'], prod_locs[pid]['y_coord']), prod_locs[pid]['section_id']) for pid in product_ids if pid in prod_locs]
+            ordered_targets = []
+            current_pos_for_sort = start
+            while targets:
+                next_target = min(targets, key=lambda t: math.dist(current_pos_for_sort, t[1]))
+                ordered_targets.append(next_target)
+                targets.remove(next_target)
+                current_pos_for_sort = next_target[1]
 
-            for _, dest_x, dest_y in sorted_destinations:
-                destination_pos = (dest_x, dest_y)
-                start_scaled = (current_pos[0] * resolution, current_pos[1] * resolution)
-                end_scaled = (destination_pos[0] * resolution, destination_pos[1] * resolution)
-                segment = astar.find_path(start_scaled, end_scaled)
-                
-                if segment:
-                    segment_to_add = segment if not full_path_coords else segment[1:]
-                    for p in segment_to_add:
-                        full_path_coords.append({'x': p[1] / resolution, 'y': p[0] / resolution})
-                    last_point_scaled = segment[-1]
-                    current_pos = (last_point_scaled[1] / resolution, last_point_scaled[0] / resolution)
-                else:
-                    logger.warning(f"Could not find path from {current_pos} to {destination_pos}")
+            # Calculate path segments
+            path_segments = []
+            current_path_start = start
+            for pid, coords, sec_id in ordered_targets:
+                segment = astar(current_path_start, coords)
+                if not segment:
+                    # Log or handle cases where a segment can't be found
+                    logger.warning(f"Could not find path from {current_path_start} to {coords} for product {pid}")
+                    continue
 
-            if not full_path_coords:
-                return jsonify(ErrorResponse(detail='Could not calculate a valid path.').dict()), 422
-            
-            # 6. Enrich path with instructions and section IDs
-            enriched_path = enrich_path(full_path_coords, product_locations)
-            response_path = [PathSegment(**p) for p in enriched_path]
+                path_segments.append({
+                    "product_id": pid,
+                    "section_id": sec_id,
+                    "destination": {"x": coords[0], "y": coords[1]},
+                    "path_length": len(segment),
+                    "path": [{"x": p[0], "y": p[1]} for p in segment],
+                    "last_instruction": f"You have arrived at section {sec_id}"
+                })
+                current_path_start = segment[-1] # Start next segment from the end of the last one
 
-        close_conn(conn)
-        return jsonify(ShortestPathResponse(path=response_path).dict()), 200
+    finally:
+        if conn and not conn.closed:
+            close_conn(conn)
 
-    except Exception as e:
-        logger.error(f"Error calculating shortest path for user {user_id}: {e}")
-        if conn and not conn.closed: close_conn(conn)
-        return jsonify(ErrorResponse(detail='Internal server error').dict()), 500
+    return jsonify({
+        "start": {"x": start[0], "y": start[1]},
+        "segments": path_segments
+    })
 
 # API 20: Add/Update Item in Cart (from ESP32)
 @bp.route('/esp32/update_item', methods=['POST'])
