@@ -20,19 +20,12 @@ bp = Blueprint('cart', __name__, url_prefix='/cart')
 
 # ----------- CONFIG & PATHFINDING GLOBALS -----------
 GRID_RES = 0.05
-AISLE_HALF_WIDTH = 0.1  # ~10 cm band on either side
 CENTERLINE_SET = set() # Global set for walkable points
 
 # ----------- NEW PATHFINDING IMPLEMENTATION -----------
 
-def frange(start, stop, step):
-    """A range function that works with floats."""
-    while start <= stop + (step / 2): # Add tolerance for float comparison
-        yield round(start, 3)
-        start += step
-
 def build_centerline_graph(sections):
-    """Builds a 'thick' set of walkable aisle points."""
+    """Builds a robust, connected graph of all aisle centerlines and their intersections."""
     global CENTERLINE_SET
     step = GRID_RES
     centerline_points = set()
@@ -40,12 +33,15 @@ def build_centerline_graph(sections):
     h_aisles = {} # {y_coord: [min_x, max_x]}
     v_aisles = {} # {x_coord: [min_y, max_y]}
 
-    # Identify horizontal and vertical aisle extents
+    # First, identify the full extent of all horizontal and vertical aisle centerlines
     for sec in sections:
         x1, x2 = min(sec['x1'], sec['x2']), max(sec['x1'], sec['x2'])
         y1, y2 = min(sec['y1'], sec['y2']), max(sec['y1'], sec['y2'])
         
-        if (x2 - x1) > (y2 - y1): # Horizontal aisle
+        width = x2 - x1
+        height = y2 - y1
+
+        if width >= height: # Horizontal aisle
             center_y = round((y1 + y2) / 2, 2)
             if center_y not in h_aisles: h_aisles[center_y] = [x1, x2]
             else:
@@ -58,29 +54,25 @@ def build_centerline_graph(sections):
                 v_aisles[center_x][0] = min(v_aisles[center_x][0], y1)
                 v_aisles[center_x][1] = max(v_aisles[center_x][1], y2)
 
-    # Build thick horizontal aisles
+    # Add all points along the identified aisle centerlines
     for y, x_range in h_aisles.items():
         x = x_range[0]
-        while x <= x_range[1]:
-            for offset in frange(-AISLE_HALF_WIDTH, AISLE_HALF_WIDTH, step):
-                centerline_points.add((round(x, 2), round(y + offset, 2)))
+        while x <= x_range[1] + (step / 2):
+            centerline_points.add((round(x, 2), y))
             x += step
 
-    # Build thick vertical aisles
     for x, y_range in v_aisles.items():
         y = y_range[0]
-        while y <= y_range[1]:
-            for offset in frange(-AISLE_HALF_WIDTH, AISLE_HALF_WIDTH, step):
-                centerline_points.add((round(x + offset, 2), round(y, 2)))
+        while y <= y_range[1] + (step / 2):
+            centerline_points.add((x, round(y, 2)))
             y += step
             
-    # Crucially, add the intersection areas
-    for y_h in h_aisles:
-        for x_v in v_aisles:
-            for y_offset in frange(-AISLE_HALF_WIDTH, AISLE_HALF_WIDTH, step):
-                centerline_points.add((x_v, round(y_h + y_offset, 2)))
-            for x_offset in frange(-AISLE_HALF_WIDTH, AISLE_HALF_WIDTH, step):
-                centerline_points.add((round(x_v + x_offset, 2), y_h))
+    # Crucially, add the intersection points of every h-aisle with every v-aisle
+    for y in h_aisles:
+        for x in v_aisles:
+            # Check if the intersection is within the aisle bounds
+            if h_aisles[y][0] <= x <= h_aisles[y][1] and v_aisles[x][0] <= y <= v_aisles[x][1]:
+                centerline_points.add((x, y))
 
     CENTERLINE_SET = centerline_points
 
