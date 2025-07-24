@@ -18,8 +18,8 @@ from heapq import heappush, heappop
 logger = logging.getLogger(__name__)
 bp = Blueprint('cart', __name__, url_prefix='/cart')
 
-# ----------- CONFIG (from user code) -----------
-GRID_RES = 0.1
+# ----------- CONFIG -----------
+GRID_RES = 0.05  # Increased resolution for finer pathfinding
 INNER_X1, INNER_X2 = 0.75, 3.25
 INNER_Y1, INNER_Y2 = 0.75, 1.25
 OUTER_X1, OUTER_X2 = 0.0, 4.0
@@ -37,28 +37,38 @@ def heuristic(a, b):
     return abs(a[0]-b[0]) + abs(a[1]-b[1])
 
 def astar(start, goal):
-    start = (round(start[0],2), round(start[1],2))
-    goal = (round(goal[0],2), round(goal[1],2))
-    
-    # If the goal isn't walkable, find the nearest walkable point.
-    if not is_walkable(goal[0], goal[1]):
-        q = [(goal[0], goal[1])]
-        visited = {goal}
-        found_walkable = False
-        while q:
-            cx, cy = q.pop(0)
-            for dx, dy in [(GRID_RES,0),(-GRID_RES,0),(0,GRID_RES),(0,-GRID_RES)]:
-                nx, ny = round(cx+dx,2), round(cy+dy,2)
-                if (nx,ny) in visited: continue
-                visited.add((nx,ny))
-                if is_walkable(nx,ny):
-                    goal = (nx,ny)
-                    found_walkable = True
-                    break
-                q.append((nx,ny))
-            if found_walkable: break
-        if not found_walkable: return []
+    start = (round(start[0], 2), round(start[1], 2))
+    goal = (round(goal[0], 2), round(goal[1], 2))
 
+    # If the goal isn't walkable, find the nearest walkable point using a robust BFS.
+    if not is_walkable(goal[0], goal[1]):
+        q = [goal]
+        visited = {goal}
+        found_walkable_goal = None
+        
+        # BFS to find the absolute closest walkable tile
+        while q:
+            current_node = q.pop(0)
+            if is_walkable(current_node[0], current_node[1]):
+                found_walkable_goal = current_node
+                break # First one found by BFS is one of the closest
+            
+            # Explore neighbors
+            cx, cy = current_node
+            for dx_multiplier, dy_multiplier in [(0, 1), (0, -1), (1, 0), (-1, 0), (1, 1), (1, -1), (1, -1), (1, 1)]:
+                nx = cx + dx_multiplier * GRID_RES
+                ny = cy + dy_multiplier * GRID_RES
+                nx, ny = round(nx, 2), round(ny, 2)
+                
+                if (nx, ny) not in visited:
+                    visited.add((nx, ny))
+                    q.append((nx, ny))
+        
+        if found_walkable_goal:
+            goal = found_walkable_goal
+        else:
+            logger.error(f"Could not find a walkable node near {goal}")
+            return [] # No walkable goal found nearby
 
     open_set = []
     heappush(open_set, (0, start))
