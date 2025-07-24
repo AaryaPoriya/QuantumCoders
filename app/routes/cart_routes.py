@@ -20,12 +20,19 @@ bp = Blueprint('cart', __name__, url_prefix='/cart')
 
 # ----------- CONFIG & PATHFINDING GLOBALS -----------
 GRID_RES = 0.05
-CENTERLINE_SET = set() # Global set for walkable points
+AISLE_HALF_WIDTH = 0.15 # Creates a ~30cm wide walkable band in each aisle
+CENTERLINE_SET = set()
 
 # ----------- NEW PATHFINDING IMPLEMENTATION -----------
 
+def frange(start, stop, step):
+    """A range function that works with floats for generating points."""
+    while start <= stop + (step / 2): # Add tolerance for float comparison
+        yield round(start, 3)
+        start += step
+
 def build_centerline_graph(sections):
-    """Builds a robust, connected graph of all aisle centerlines and their intersections."""
+    """Builds a robust, connected graph of all aisles as 'walkable bands'."""
     global CENTERLINE_SET
     step = GRID_RES
     centerline_points = set()
@@ -33,7 +40,7 @@ def build_centerline_graph(sections):
     h_aisles = {} # {y_coord: [min_x, max_x]}
     v_aisles = {} # {x_coord: [min_y, max_y]}
 
-    # First, identify the full extent of all horizontal and vertical aisle centerlines
+    # Identify the full extent of all horizontal and vertical aisle centerlines
     for sec in sections:
         x1, x2 = min(sec['x1'], sec['x2']), max(sec['x1'], sec['x2'])
         y1, y2 = min(sec['y1'], sec['y2']), max(sec['y1'], sec['y2'])
@@ -54,26 +61,25 @@ def build_centerline_graph(sections):
                 v_aisles[center_x][0] = min(v_aisles[center_x][0], y1)
                 v_aisles[center_x][1] = max(v_aisles[center_x][1], y2)
 
-    # Add all points along the identified aisle centerlines
-    for y, x_range in h_aisles.items():
-        x = x_range[0]
-        while x <= x_range[1] + (step / 2):
-            centerline_points.add((round(x, 2), y))
-            x += step
+    # Generate the walkable bands for each aisle
+    for y_center, x_range in h_aisles.items():
+        for x in frange(x_range[0], x_range[1], step):
+            for y_offset in frange(-AISLE_HALF_WIDTH, AISLE_HALF_WIDTH, step):
+                centerline_points.add((round(x, 2), round(y_center + y_offset, 2)))
 
-    for x, y_range in v_aisles.items():
-        y = y_range[0]
-        while y <= y_range[1] + (step / 2):
-            centerline_points.add((x, round(y, 2)))
-            y += step
-            
-    # Crucially, add the intersection points of every h-aisle with every v-aisle
-    for y in h_aisles:
-        for x in v_aisles:
-            # Check if the intersection is within the aisle bounds
-            if h_aisles[y][0] <= x <= h_aisles[y][1] and v_aisles[x][0] <= y <= v_aisles[x][1]:
-                centerline_points.add((x, y))
+    for x_center, y_range in v_aisles.items():
+        for y in frange(y_range[0], y_range[1], step):
+            for x_offset in frange(-AISLE_HALF_WIDTH, AISLE_HALF_WIDTH, step):
+                centerline_points.add((round(x_center + x_offset, 2), round(y, 2)))
 
+    # Ensure intersection areas are fully walkable
+    for y_center in h_aisles:
+        for x_center in v_aisles:
+             if h_aisles[y_center][0] <= x_center <= h_aisles[y_center][1] and v_aisles[x_center][0] <= y_center <= v_aisles[x_center][1]:
+                for x_offset in frange(-AISLE_HALF_WIDTH, AISLE_HALF_WIDTH, step):
+                     for y_offset in frange(-AISLE_HALF_WIDTH, AISLE_HALF_WIDTH, step):
+                         centerline_points.add((round(x_center + x_offset, 2), round(y_center + y_offset, 2)))
+    
     CENTERLINE_SET = centerline_points
 
 def find_nearest_centerline_node(coords):
