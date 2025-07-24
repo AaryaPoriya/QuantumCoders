@@ -134,14 +134,14 @@ def snap_to_section_center(section, prod_x, prod_y):
     width = x2 - x1
     height = y2 - y1
 
+    # horizontal aisle → snap Y
     if width >= height:
-        # horizontal aisle: fix Y to centerline
-        center_y = round((y1 + y2) / 2, 2)
-        return (round(prod_x, 2), center_y)
+        center_y = round((y1 + y2) / 2, 3)
+        return (round(prod_x, 3), center_y)
     else:
         # vertical aisle: fix X to centerline
-        center_x = round((x1 + x2) / 2, 2)
-        return (center_x, round(prod_y, 2))
+        center_x = round((x1 + x2) / 2, 3)
+        return (center_x, round(prod_y, 3))
 
 # API 13: Connect Cart
 @bp.route('/connect', methods=['POST'])
@@ -442,11 +442,13 @@ def get_shortest_path_route():
                     continue
                 section_geom = {'x1':float(sec_row[0]), 'y1':float(sec_row[1]), 'x2':float(sec_row[2]), 'y2':float(sec_row[3])}
 
-                # Snap the goal to its own section's centerline, then to the global graph.
+                # Snap start to the global centerline, and goal to its own section's centerline first
+                snapped_start = find_nearest_centerline_node(current_path_start)
                 section_snap = snap_to_section_center(section_geom, coords[0], coords[1])
+                logger.info(f"Original product {pid} coords: {coords}, snapped to: {section_snap}") # DEBUG LOGGING
                 snapped_goal = find_nearest_centerline_node(section_snap)
 
-                if not snapped_goal:
+                if not snapped_start or not snapped_goal:
                     logger.warning(f"Could not snap goal for product {pid}")
                     continue
 
