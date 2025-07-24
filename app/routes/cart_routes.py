@@ -18,80 +18,102 @@ from heapq import heappush, heappop
 logger = logging.getLogger(__name__)
 bp = Blueprint('cart', __name__, url_prefix='/cart')
 
-# ----------- CONFIG -----------
-GRID_RES = 0.05  # Increased resolution for finer pathfinding
-INNER_X1, INNER_X2 = 0.75, 3.25
-INNER_Y1, INNER_Y2 = 0.75, 1.25
-OUTER_X1, OUTER_X2 = 0.0, 4.0
-OUTER_Y1, OUTER_Y2 = 0.0, 2.0
-# ---------------------------------------------
+# ----------- CONFIG & PATHFINDING GLOBALS -----------
+GRID_RES = 0.05
+CENTERLINE_SET = set() # Global set for walkable points
+
+# ----------- NEW PATHFINDING IMPLEMENTATION -----------
+
+def build_centerline_graph(sections):
+    """Builds a set of walkable centerline points from section geometry."""
+    global CENTERLINE_SET
+    centerline_points = []
+    step = GRID_RES
+
+    def add_horizontal(x_start, x_end, y):
+        x = x_start
+        while x < x_end + (step / 2):
+            centerline_points.append((round(x, 2), round(y, 2)))
+            x += step
+
+    def add_vertical(y_start, y_end, x):
+        y = y_start
+        while y < y_end + (step / 2):
+            centerline_points.append((round(x, 2), round(y, 2)))
+            y += step
+
+    h_ys, v_xs = set(), set()
+
+    for sec in sections:
+        x1, x2 = min(sec['x1'], sec['x2']), max(sec['x1'], sec['x2'])
+        y1, y2 = min(sec['y1'], sec['y2']), max(sec['y1'], sec['y2'])
+        
+        if (x2 - x1) > (y2 - y1):
+            center_y = round((y1 + y2) / 2, 2)
+            add_horizontal(x1, x2, center_y)
+            h_ys.add(center_y)
+        else:
+            center_x = round((x1 + x2) / 2, 2)
+            add_vertical(y1, y2, center_x)
+            v_xs.add(center_x)
+
+    # Add intersection nodes to connect aisles
+    for y_coord in h_ys:
+        for x_coord in v_xs:
+            centerline_points.append((x_coord, y_coord))
+
+    CENTERLINE_SET = set(centerline_points)
+
+def find_nearest_centerline_node(coords):
+    """Finds the closest point in the centerline_set to the given coordinates."""
+    if not CENTERLINE_SET:
+        return None
+    return min(CENTERLINE_SET, key=lambda p: math.dist(coords, p))
 
 def is_walkable(x, y):
-    if not (OUTER_X1 <= x <= OUTER_X2 and OUTER_Y1 <= y <= OUTER_Y2):
-        return False
-    if INNER_X1 <= x <= INNER_X2 and INNER_Y1 <= y <= INNER_Y2:
-        return False
-    return True
+    """Checks if a point is on a pre-calculated centerline."""
+    return (round(x, 2), round(y, 2)) in CENTERLINE_SET
 
 def heuristic(a, b):
-    return abs(a[0]-b[0]) + abs(a[1]-b[1])
+    return abs(a[0] - b[0]) + abs(a[1] - b[1])
 
 def astar(start, goal):
-    start = (round(start[0], 2), round(start[1], 2))
-    goal = (round(goal[0], 2), round(goal[1], 2))
+    start_node = find_nearest_centerline_node(start)
+    goal_node = find_nearest_centerline_node(goal)
 
-    # If the goal isn't walkable, find the nearest walkable point using a robust BFS.
-    if not is_walkable(goal[0], goal[1]):
-        q = [goal]
-        visited = {goal}
-        found_walkable_goal = None
-        
-        # BFS to find the absolute closest walkable tile
-        while q:
-            current_node = q.pop(0)
-            if is_walkable(current_node[0], current_node[1]):
-                found_walkable_goal = current_node
-                break # First one found by BFS is one of the closest
-            
-            # Explore neighbors
-            cx, cy = current_node
-            for dx_multiplier, dy_multiplier in [(0, 1), (0, -1), (1, 0), (-1, 0), (1, 1), (1, -1), (1, -1), (1, 1)]:
-                nx = cx + dx_multiplier * GRID_RES
-                ny = cy + dy_multiplier * GRID_RES
-                nx, ny = round(nx, 2), round(ny, 2)
-                
-                if (nx, ny) not in visited:
-                    visited.add((nx, ny))
-                    q.append((nx, ny))
-        
-        if found_walkable_goal:
-            goal = found_walkable_goal
-        else:
-            logger.error(f"Could not find a walkable node near {goal}")
-            return [] # No walkable goal found nearby
+    if not start_node or not goal_node:
+        logger.error(f"Could not snap start {start} or goal {goal} to a centerline.")
+        return []
 
     open_set = []
-    heappush(open_set, (0, start))
+    heappush(open_set, (0, start_node))
     came_from = {}
-    g_score = {start: 0}
+    g_score = {start_node: 0}
+
     while open_set:
         _, current = heappop(open_set)
-        if math.dist(current, goal) < GRID_RES*1.1:
+
+        if current == goal_node:
             path = [current]
             while current in came_from:
                 current = came_from[current]
                 path.append(current)
             return path[::-1]
+
         cx, cy = current
-        for dx, dy in [(GRID_RES,0),(-GRID_RES,0),(0,GRID_RES),(0,-GRID_RES)]:
-            nx, ny = round(cx+dx,2), round(cy+dy,2)
-            if not is_walkable(nx, ny): continue
-            tentative = g_score[current] + math.dist(current,(nx,ny))
-            if tentative < g_score.get((nx,ny), 1e9):
-                came_from[(nx,ny)] = current
-                g_score[(nx,ny)] = tentative
-                f = tentative + heuristic((nx,ny), goal)
-                heappush(open_set, (f, (nx,ny)))
+        for dx, dy in [(GRID_RES, 0), (-GRID_RES, 0), (0, GRID_RES), (0, -GRID_RES)]:
+            nx, ny = round(cx + dx, 2), round(cy + dy, 2)
+            
+            if not is_walkable(nx, ny):
+                continue
+            
+            tentative_g = g_score[current] + GRID_RES
+            
+            if tentative_g < g_score.get((nx, ny), float('inf')):
+                came_from[(nx, ny)] = current
+                g_score[(nx, ny)] = tentative_g
+                f = tentative_g + heuristic((nx, ny), goal_node)
+                heappush(open_set, (f, (nx, ny)))
     return []
 
 # API 13: Connect Cart
@@ -325,18 +347,22 @@ def get_shortest_path_route():
     if not user_id:
         return jsonify(ErrorResponse(detail='Authentication required.').dict()), 401
     
-    conn = None # Initialize conn to None
+    conn = None
     try:
         from app.db import get_conn, close_conn
-        conn = get_conn() # Get connection inside the try block
+        conn = get_conn()
         with conn.cursor() as cur:
-            # Get user's active cart location
+            # Step 1: Build the centerline graph from store section data
+            cur.execute("SELECT x1, y1, x2, y2 FROM public.store_sections;")
+            sections_raw = cur.fetchall()
+            sections = [{'x1': float(r[0]), 'y1': float(r[1]), 'x2': float(r[2]), 'y2': float(r[3])} for r in sections_raw]
+            build_centerline_graph(sections)
+
+            # Step 2: Get user's active cart location
             cur.execute("""
-                SELECT cl.x_coord, cl.y_coord
-                FROM public.total_carts tc
+                SELECT cl.x_coord, cl.y_coord FROM public.total_carts tc
                 JOIN public.cart_locations cl ON tc.cart_id = cl.cart_id
-                WHERE tc.user_id = %s
-                ORDER BY cl.updated_at DESC LIMIT 1;
+                WHERE tc.user_id = %s ORDER BY cl.updated_at DESC LIMIT 1;
             """, (user_id,))
             cart_loc_row = cur.fetchone()
             if not cart_loc_row:
@@ -344,23 +370,22 @@ def get_shortest_path_route():
             
             start = (float(cart_loc_row[0]), float(cart_loc_row[1]))
 
-            # Get product IDs from request body
+            # Step 3: Get product destinations
             body = request.get_json()
             product_ids = [d.get('product_id') for d in body.get('destinations', [])]
             if not product_ids:
                 return jsonify({"error": "No destinations provided."}), 400
 
-            # Fetch product locations
             cur.execute("""
-                SELECT product_id, x_coord, y_coord, section_id
-                FROM public.product_locations
+                SELECT product_id, x_coord, y_coord, section_id FROM public.product_locations
                 WHERE product_id = ANY(%s)
             """, (product_ids,))
             prod_locs_raw = cur.fetchall()
-            prod_locs = {row[0]: {'x_coord': float(row[1]), 'y_coord': float(row[2]), 'section_id': row[3]} for row in prod_locs_raw}
+            prod_locs = {r[0]: {'x_coord': float(r[1]), 'y_coord': float(r[2]), 'section_id': r[3]} for r in prod_locs_raw}
             
-            # Order targets by nearest (greedy approach)
+            # Step 4: Order targets by nearest and calculate path
             targets = [(pid, (prod_locs[pid]['x_coord'], prod_locs[pid]['y_coord']), prod_locs[pid]['section_id']) for pid in product_ids if pid in prod_locs]
+            
             ordered_targets = []
             current_pos_for_sort = start
             while targets:
@@ -369,13 +394,11 @@ def get_shortest_path_route():
                 targets.remove(next_target)
                 current_pos_for_sort = next_target[1]
 
-            # Calculate path segments
             path_segments = []
             current_path_start = start
             for pid, coords, sec_id in ordered_targets:
                 segment = astar(current_path_start, coords)
                 if not segment:
-                    # Log or handle cases where a segment can't be found
                     logger.warning(f"Could not find path from {current_path_start} to {coords} for product {pid}")
                     continue
 
@@ -387,7 +410,7 @@ def get_shortest_path_route():
                     "path": [{"x": p[0], "y": p[1]} for p in segment],
                     "last_instruction": f"You have arrived at section {sec_id}"
                 })
-                current_path_start = segment[-1] # Start next segment from the end of the last one
+                current_path_start = segment[-1]
 
     finally:
         if conn and not conn.closed:
