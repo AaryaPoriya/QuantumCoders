@@ -3,8 +3,7 @@ import heapq
 import collections
 
 def astar(grid, start, end):
-    height = len(grid)
-    width = len(grid[0])
+    height, width = len(grid), len(grid[0])
     
     # Check if start or end are out of bounds
     if not (0 <= start[0] < height and 0 <= start[1] < width): return None
@@ -13,20 +12,19 @@ def astar(grid, start, end):
     # If start or end are obstacles, find the nearest walkable node
     if grid[start[0]][start[1]] == 1:
         start = find_nearest_walkable(grid, start)
-        if start is None: return None
+        if start is None: return None # No path if start is trapped
             
     if grid[end[0]][end[1]] == 1:
         end = find_nearest_walkable(grid, end)
-        if end is None: return None
+        if end is None: return None # No path if end is trapped
 
-    open_set = []
-    heapq.heappush(open_set, (0, start))
-    
+    open_set = [(0, start)]
     came_from = {}
-    g_score = { (r,c): float('inf') for r in range(height) for c in range(width) }
+    
+    g_score = { (r, c): float('inf') for r in range(height) for c in range(width) }
     g_score[start] = 0
     
-    f_score = { (r,c): float('inf') for r in range(height) for c in range(width) }
+    f_score = { (r, c): float('inf') for r in range(height) for c in range(width) }
     f_score[start] = heuristic(start, end)
 
     while open_set:
@@ -35,52 +33,51 @@ def astar(grid, start, end):
         if current == end:
             return reconstruct_path(came_from, current)
 
-        for dr, dc in [(0, 1), (0, -1), (1, 0), (-1, 0), (1, 1), (1, -1), (-1, 1), (-1, -1)]:
+        # Use 4-directional movement for grid paths
+        for dr, dc in [(0, 1), (0, -1), (1, 0), (-1, 0)]:
             neighbor = (current[0] + dr, current[1] + dc)
 
             if not (0 <= neighbor[0] < height and 0 <= neighbor[1] < width) or grid[neighbor[0]][neighbor[1]] == 1:
                 continue
             
-            tentative_g_score = g_score[current] + heuristic(current, neighbor)
+            # Using cost of 1 for adjacent grid cells
+            tentative_g_score = g_score[current] + 1
 
             if tentative_g_score < g_score[neighbor]:
-                came_from[neighbor] = neighbor
+                came_from[neighbor] = current  # <-- THE CRITICAL BUG FIX IS HERE
                 g_score[neighbor] = tentative_g_score
                 f_score[neighbor] = tentative_g_score + heuristic(neighbor, end)
                 heapq.heappush(open_set, (f_score[neighbor], neighbor))
                 
-    return None
+    return None # Path not found
 
 def find_nearest_walkable(grid, node):
-    height = len(grid)
-    width = len(grid[0])
-    
-    q = collections.deque([(node, [node])])
+    q = collections.deque([node])
     visited = {node}
     
     while q:
-        current_node, path = q.popleft()
+        y, x = q.popleft()
         
-        if grid[current_node[0]][current_node[1]] == 0:
-            return current_node
+        if grid[y][x] == 0:
+            return (y, x)
             
-        for dr, dc in [(0, 1), (0, -1), (1, 0), (-1, 0), (1, 1), (1, -1), (-1, 1), (-1, -1)]:
-            neighbor = (current_node[0] + dr, current_node[1] + dc)
+        # Use 4-directional search
+        for dy, dx in [(0, 1), (0, -1), (1, 0), (-1, 0)]:
+            ny, nx = y + dy, x + dx
             
-            if (0 <= neighbor[0] < height and 0 <= neighbor[1] < width) and neighbor not in visited:
-                visited.add(neighbor)
-                new_path = list(path)
-                new_path.append(neighbor)
-                q.append((neighbor, new_path))
+            if (0 <= ny < len(grid) and 0 <= nx < len(grid[0])) and (ny, nx) not in visited:
+                visited.add((ny, nx))
+                q.append((ny, nx))
                 
     return None
 
 def heuristic(a, b):
-    return ((a[0] - b[0]) ** 2 + (a[1] - b[1]) ** 2) ** 0.5
+    # Manhattan distance for 4-directional movement
+    return abs(a[0] - b[0]) + abs(a[1] - b[1])
 
 def reconstruct_path(came_from, current):
     path = [current]
-    while current in came_from and came_from[current] != current:
+    while current in came_from:
         current = came_from[current]
         path.append(current)
     return path[::-1]
