@@ -364,7 +364,7 @@ def get_shortest_path_route():
             sections = [{'x1': float(r[0]), 'y1': float(r[1]), 'x2': float(r[2]), 'y2': float(r[3])} for r in sections_raw]
             build_centerline_graph(sections)
 
-            # Step 2: Get user's active cart location
+            # Step 2: Get user's active cart location and snap it to the centerline
             cur.execute("""
                 SELECT cl.x_coord, cl.y_coord FROM public.total_carts tc
                 JOIN public.cart_locations cl ON tc.cart_id = cl.cart_id
@@ -374,7 +374,16 @@ def get_shortest_path_route():
             if not cart_loc_row:
                 return jsonify({"error": "No active cart location found for user."}), 404
             
-            start = (float(cart_loc_row[0]), float(cart_loc_row[1]))
+            original_start = (float(cart_loc_row[0]), float(cart_loc_row[1]))
+            start = find_nearest_centerline_node(original_start)
+
+            # Force fallback if no snap found
+            if not start and CENTERLINE_SET:
+                start = min(CENTERLINE_SET, key=lambda p: math.dist(original_start, p))
+            
+            if not start:
+                logger.error("Could not snap cart's start location to any centerline node.")
+                return jsonify({"error": "Could not determine a valid starting position on the route."}), 500
 
             # Step 3: Get product destinations
             body = request.get_json()
@@ -411,19 +420,19 @@ def get_shortest_path_route():
                 current_pos_for_sort = next_target[1]
 
             path_segments = []
-            current_path_start = start
+            current_path_start = start # Use the snapped start position
             for pid, coords, sec_id in ordered_targets:
-                # Snap both start and goal to nearest centerline nodes
-                snapped_start = find_nearest_centerline_node(current_path_start)
+                # Goal is already snapped inside the loop
                 snapped_goal = find_nearest_centerline_node(coords)
-
-                if not snapped_start or not snapped_goal:
-                    logger.warning(f"Could not snap path for product {pid}")
+                
+                if not snapped_goal:
+                    logger.warning(f"Could not snap goal for product {pid}")
                     continue
 
-                segment = astar(snapped_start, snapped_goal)
+                # The start of the segment is already guaranteed to be on the centerline
+                segment = astar(current_path_start, snapped_goal)
                 if not segment:
-                    logger.warning(f"Could not find path from {snapped_start} to {snapped_goal} for product {pid}")
+                    logger.warning(f"Could not find path from {current_path_start} to {snapped_goal} for product {pid}")
                     continue
 
                 path_segments.append({
@@ -434,7 +443,7 @@ def get_shortest_path_route():
                     "path": [{"x": p[0], "y": p[1]} for p in segment],
                     "last_instruction": f"You have arrived at section {sec_id}"
                 })
-                current_path_start = snapped_goal # The next start is the snapped goal of the current segment
+                current_path_start = snapped_goal # The next start is the snapped goal
 
     finally:
         if conn and not conn.closed:
