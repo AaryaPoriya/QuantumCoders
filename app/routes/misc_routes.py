@@ -6,7 +6,7 @@ from app.models import (
 )
 from app.db import execute_query
 from app.auth import jwt_required
-from app.utils import serialize_rows
+from app.utils import serialize_rows, serialize_row
 import logging
 
 logger = logging.getLogger(__name__)
@@ -84,4 +84,4 @@ def serve_image(filename):
     # '..' goes one level up to the project root ('QuantumCoders').
     # This creates a reliable path to QuantumCoders/images/.
     images_dir = os.path.abspath(os.path.join(current_app.root_path, '..', 'images'))
-    return send_from_directory(images_dir, filename) 
+    return send_from_directory(images_dir, filename)
