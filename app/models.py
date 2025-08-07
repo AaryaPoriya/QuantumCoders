@@ -174,7 +174,7 @@ class CartLocation(BaseModel):
 
 class Esp32CartUpdateRequest(BaseModel):
     cart_id: int
-    product_id: int
+    barcode: str
     weight: float
 
 class CartWeightUpdateRequest(BaseModel):
@@ -252,4 +252,4 @@ class Allergy(BaseModel):
     allergy_id: int
     allergy_name: str
     class Config:
-        from_attributes = True 
+        from_attributes = True
