@@ -539,6 +539,7 @@ def update_cart_item_esp32_route():
                         """
                         cur.execute(upsert_query, (data.cart_id, product_id, quantity))
                     else:
+                        conn.rollback()
                         raise
             else:
                 # If weight is 0, remove the item from the cart
@@ -573,6 +574,7 @@ def update_cart_item_esp32_route():
                     """
                     cur.execute(update_weight_query, (data.cart_id,))
                 else:
+                    conn.rollback()
                     raise
             conn.commit()
 
