@@ -552,7 +552,6 @@ def update_cart_item_esp32_route():
             cur.execute(update_weight_query, (data.cart_id,))
             conn.commit()
 
-        close_conn(conn)
         return jsonify(MessageResponse(message=f"Cart {data.cart_id} updated for product with barcode {data.barcode} with quantity {quantity}.").dict()), 200
 
     except psycopg2.Error as db_err:
