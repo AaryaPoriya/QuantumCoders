@@ -524,7 +524,7 @@ def update_cart_item_esp32_route():
                 INSERT INTO public.cart_items (cart_id, product_id, quantity)
                 VALUES (%s, %s, %s)
                 ON CONFLICT (cart_id, product_id)
-                DO UPDATE SET quantity = EXCLUDED.quantity;
+                DO UPDATE SET quantity = cart_items.quantity + EXCLUDED.quantity;
                 """
                 cur.execute(upsert_query, (data.cart_id, product_id, quantity))
             else:
