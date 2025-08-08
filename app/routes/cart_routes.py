@@ -558,22 +558,22 @@ def update_cart_item_esp32_route():
                 WHERE tc.cart_id = %s;
                 """
                 cur.execute(update_weight_query, (data.cart_id,))
-             except psycopg2.Error as e:
-                 # If weight column doesn't exist, fall back to the original calculation
-                 if "column ci.weight does not exist" in str(e):
-                     update_weight_query = """
-                     UPDATE public.total_carts tc
-                     SET cart_weight = (
-                         SELECT SUM(p.weight * ci.quantity)
-                         FROM public.cart_items ci
-                         JOIN public.product p ON ci.product_id = p.product_id
-                         WHERE ci.cart_id = tc.cart_id
-                     )
-                     WHERE tc.cart_id = %s;
-                     """
-                     cur.execute(update_weight_query, (data.cart_id,))
-                 else:
-                     raise
+            except psycopg2.Error as e:
+                # If weight column doesn't exist, fall back to the original calculation
+                if "column ci.weight does not exist" in str(e):
+                    update_weight_query = """
+                    UPDATE public.total_carts tc
+                    SET cart_weight = (
+                        SELECT SUM(p.weight * ci.quantity)
+                        FROM public.cart_items ci
+                        JOIN public.product p ON ci.product_id = p.product_id
+                        WHERE ci.cart_id = tc.cart_id
+                    )
+                    WHERE tc.cart_id = %s;
+                    """
+                    cur.execute(update_weight_query, (data.cart_id,))
+                else:
+                    raise
             conn.commit()
 
         return jsonify(MessageResponse(message=f"Cart {data.cart_id} updated for product with barcode {data.barcode} with weight {data.weight}.").dict()), 200
