@@ -264,7 +264,6 @@ def view_cart_route():
             row = cur.fetchone()
             
             if not row or not row[0]:
-                close_conn(conn)
                 return jsonify(ErrorResponse(detail='No active cart found for user.').dict()), 404
             
             cart_data = serialize_row(row, cur.description)
@@ -277,7 +276,6 @@ def view_cart_route():
                 total_weight=cart_data.get('cart_weight')
             )
 
-        close_conn(conn)
         return jsonify(response_data.dict()), 200
     except Exception as e:
         logger.error(f"Error viewing cart for user {user_id}: {e}")
@@ -309,11 +307,9 @@ def get_cart_location_route(cart_id):
             cur.execute(query, (cart_id,))
             row = cur.fetchone()
             if not row:
-                close_conn(conn)
                 return jsonify(ErrorResponse(detail=f'Location not found for cart {cart_id}.').dict()), 404
             cart_loc_dict = serialize_row(row, cur.description)
-        close_conn(conn)
-
+        
         if cart_loc_dict:
             return jsonify(CartLocationModel(**cart_loc_dict).dict()), 200
         else:
@@ -372,7 +368,6 @@ def get_product_locations_route():
                         section=section_data
                     )
                     locations_data.append(loc_obj)
-        close_conn(conn)
         return jsonify([loc.dict() for loc in locations_data]), 200
     except Exception as e:
         logger.error(f"Error fetching product locations for ids {product_ids}: {e}")
@@ -600,7 +595,6 @@ def add_product_to_cart_route():
             cur.execute(upsert_query, (cart_id, data.product_id))
             conn.commit()
 
-        close_conn(conn)
         return jsonify(MessageResponse(message=f"Product {data.product_id} added to cart.").dict()), 200
 
     except psycopg2.Error as db_err:
@@ -658,7 +652,6 @@ def remove_product_from_cart_route():
 
             conn.commit()
             
-        close_conn(conn)
         return jsonify(MessageResponse(message=f"Product {data.product_id} removed from cart.").dict()), 200
         
     except psycopg2.Error as db_err:
@@ -697,8 +690,6 @@ def disconnect_cart_route():
             disconnected_cart_row = cur.fetchone()
             conn.commit()
             
-        close_conn(conn)
-
         if disconnected_cart_row:
             cart_id = disconnected_cart_row[0]
             return jsonify(MessageResponse(message=f'Cart {cart_id} disconnected successfully.').dict()), 200

@@ -30,7 +30,6 @@ def checkout_route():
             cur.execute("SELECT cart_id FROM public.total_carts WHERE user_id = %s LIMIT 1;", (user_id,))
             cart_row = cur.fetchone()
             if not cart_row:
-                close_conn(conn)
                 return jsonify(ErrorResponse(detail='No active cart to checkout.').dict()), 404
             cart_id = cart_row[0]
 
@@ -45,7 +44,6 @@ def checkout_route():
             cart_items_raw = cur.fetchall()
             
             if not cart_items_raw:
-                close_conn(conn)
                 return jsonify(ErrorResponse(detail='Cart is empty. Nothing to checkout.').dict()), 400
 
             total_products_count = 0
@@ -104,7 +102,6 @@ def checkout_route():
             # cur.execute("UPDATE public.total_carts SET cart_weight = 0 WHERE cart_id = %s;", (cart_id,))
 
             conn.commit()
-        close_conn(conn)
         
         return jsonify(CheckoutResponse(
             order_id=new_order_id,
@@ -173,9 +170,8 @@ def get_order_history():
                     order_data['items'] = [DetailOrderItemResponse(**item) for item in items_list]
                     orders_list.append(OrderResponse(**order_data))
 
-        close_conn(conn)
         return jsonify([o.dict() for o in orders_list]), 200
     except Exception as e:
         logger.error(f"Error fetching order history for user {user_id}: {e}")
         if conn and not conn.closed: close_conn(conn)
-        return jsonify(ErrorResponse(detail='Internal server error').dict()), 500 
+        return jsonify(ErrorResponse(detail='Internal server error').dict()), 500
