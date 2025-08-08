@@ -505,80 +505,54 @@ def update_cart_item_esp32_route():
         conn = get_conn()
         with conn.cursor() as cur:
             # Get product_id from barcode
-            cur.execute("SELECT product_id FROM public.product WHERE barcode = %s;", (data.barcode,))
+            cur.execute("SELECT product_id, weight FROM public.product WHERE barcode = %s;", (data.barcode,))
             product_row = cur.fetchone()
             if not product_row:
                 conn.rollback()
                 return jsonify(ErrorResponse(detail=f"Product with barcode {data.barcode} not found.").dict()), 404
             
             product_id = product_row[0]
-            
-            # Use the weight directly as passed in the request
-            quantity = 1  # Default quantity is 1 since we're using weight directly
+            base_product_weight = product_row[1]
+            if base_product_weight is None or base_product_weight == 0:
+                conn.rollback() # No need to proceed if weight is not defined
+                return jsonify(ErrorResponse(detail=f"Product with barcode {data.barcode} has no defined weight.").dict()), 400
 
-            # Use the weight directly from the request
-            if data.weight > 0:
-                # Check if the cart_items table has a weight column
-                try:
-                    # Upsert: Update quantity and weight if item exists, else insert
-                    upsert_query = """
-                    INSERT INTO public.cart_items (cart_id, product_id, quantity, weight)
-                    VALUES (%s, %s, %s, %s)
-                    ON CONFLICT (cart_id, product_id)
-                    DO UPDATE SET quantity = EXCLUDED.quantity, weight = EXCLUDED.weight;
-                    """
-                    cur.execute(upsert_query, (data.cart_id, product_id, quantity, data.weight))
-                except psycopg2.Error as e:
-                    # If weight column doesn't exist, fall back to the original query
-                    if "column \"weight\" of relation \"cart_items\" does not exist" in str(e):
-                        upsert_query = """
-                        INSERT INTO public.cart_items (cart_id, product_id, quantity)
-                        VALUES (%s, %s, %s)
-                        ON CONFLICT (cart_id, product_id)
-                        DO UPDATE SET quantity = EXCLUDED.quantity;
-                        """
-                        cur.execute(upsert_query, (data.cart_id, product_id, quantity))
-                    else:
-                        conn.rollback()
-                        raise
+            # Determine quantity from total weight measured by ESP32
+            # This logic assumes the weight passed is the total for that product type
+            # Convert decimal.Decimal to float to avoid type error
+            base_product_weight_float = float(base_product_weight)
+            quantity = round(data.weight / base_product_weight_float)
+
+            if quantity > 0:
+                # Upsert: Update quantity if item exists, else insert
+                upsert_query = """
+                INSERT INTO public.cart_items (cart_id, product_id, quantity)
+                VALUES (%s, %s, %s)
+                ON CONFLICT (cart_id, product_id)
+                DO UPDATE SET quantity = EXCLUDED.quantity;
+                """
+                cur.execute(upsert_query, (data.cart_id, product_id, quantity))
             else:
-                # If weight is 0, remove the item from the cart
+                # If quantity is 0, remove the item from the cart
                 delete_query = "DELETE FROM public.cart_items WHERE cart_id = %s AND product_id = %s;"
                 cur.execute(delete_query, (data.cart_id, product_id))
 
             # After updating cart items, update the total weight in the total_carts table
-            # Try to use the weight column from cart_items if it exists, otherwise fall back to product weight * quantity
-            try:
-                update_weight_query = """
-                UPDATE public.total_carts tc
-                SET cart_weight = (
-                    SELECT SUM(ci.weight)
-                    FROM public.cart_items ci
-                    WHERE ci.cart_id = tc.cart_id
-                )
-                WHERE tc.cart_id = %s;
-                """
-                cur.execute(update_weight_query, (data.cart_id,))
-            except psycopg2.Error as e:
-                # If weight column doesn't exist, fall back to the original calculation
-                if "column ci.weight does not exist" in str(e):
-                    update_weight_query = """
-                    UPDATE public.total_carts tc
-                    SET cart_weight = (
-                        SELECT SUM(p.weight * ci.quantity)
-                        FROM public.cart_items ci
-                        JOIN public.product p ON ci.product_id = p.product_id
-                        WHERE ci.cart_id = tc.cart_id
-                    )
-                    WHERE tc.cart_id = %s;
-                    """
-                    cur.execute(update_weight_query, (data.cart_id,))
-                else:
-                    conn.rollback()
-                    raise
+            # This requires summing up all item weights in the cart
+            update_weight_query = """
+            UPDATE public.total_carts tc
+            SET cart_weight = (
+                SELECT SUM(p.weight * ci.quantity)
+                FROM public.cart_items ci
+                JOIN public.product p ON ci.product_id = p.product_id
+                WHERE ci.cart_id = tc.cart_id
+            )
+            WHERE tc.cart_id = %s;
+            """
+            cur.execute(update_weight_query, (data.cart_id,))
             conn.commit()
 
-        return jsonify(MessageResponse(message=f"Cart {data.cart_id} updated for product with barcode {data.barcode} with weight {data.weight}.").dict()), 200
+        return jsonify(MessageResponse(message=f"Cart {data.cart_id} updated for product with barcode {data.barcode} with quantity {quantity}.").dict()), 200
 
     except psycopg2.Error as db_err:
         if conn: conn.rollback()
