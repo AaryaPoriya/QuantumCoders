@@ -519,7 +519,9 @@ def update_cart_item_esp32_route():
 
             # Determine quantity from total weight measured by ESP32
             # This logic assumes the weight passed is the total for that product type
-            quantity = round(data.weight / base_product_weight)
+            # Convert decimal.Decimal to float to avoid type error
+            base_product_weight_float = float(base_product_weight)
+            quantity = round(data.weight / base_product_weight_float)
 
             if quantity > 0:
                 # Upsert: Update quantity if item exists, else insert
